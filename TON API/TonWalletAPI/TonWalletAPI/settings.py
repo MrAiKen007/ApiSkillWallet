@@ -172,6 +172,11 @@ CRYPTO_SALT = os.getenv('CRYPTO_SALT').encode()
 SECRET_KEY = os.getenv('SECRET_KEY') 
 AUTH_USER_MODEL = 'api.User' 
 
+_CRYPTO_SALT_STR = os.environ.get("CRYPTO_SALT", None)
+if not _CRYPTO_SALT_STR:
+    raise RuntimeError("Você precisa definir a variável CRYPTO_SALT no .env")
+CRYPTO_SALT = _CRYPTO_SALT_STR.encode()
+
 # Configurações de criptografia
 FERNET_KEY = base64.urlsafe_b64encode(
     PBKDF2HMAC(

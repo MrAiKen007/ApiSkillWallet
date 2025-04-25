@@ -2,6 +2,7 @@ import base64
 import json
 import hashlib
 import requests
+import logging
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -9,6 +10,9 @@ from cryptography.hazmat.backends import default_backend
 from django.conf import settings
 from mnemonic import Mnemonic
 from cryptography.fernet import Fernet
+from cryptography.fernet import InvalidToken
+
+logger = logging.getLogger(__name__)
 
 class BlockchainError(Exception):
     pass
@@ -42,13 +46,20 @@ def encrypt_seed(seed: str) -> str:
     cipher = Fernet(derive_crypto_key())
     return cipher.encrypt(seed.encode()).decode()
 
+from cryptography.fernet import InvalidToken
+
 def decrypt_seed(encrypted: str) -> str:
     """Descriptografa a seed phrase usando chave derivada"""
+    cipher = Fernet(derive_crypto_key())
     try:
-        cipher = Fernet(derive_crypto_key())
         return cipher.decrypt(encrypted.encode()).decode()
+    except InvalidToken as e:
+        logger.error("Chave Fernet não corresponde: %r", e)
+        raise BlockchainError("Falha na descriptografia: token inválido")
     except Exception as e:
-        raise BlockchainError(f"Falha na descriptografia: {str(e)}")
+        logger.exception("Erro inesperado na descriptografia")
+        raise BlockchainError("Falha na descriptografia: erro interno")
+
 
 def get_public_key(seed: str) -> str:
     """Gera chave pública Ed25519 a partir da seed"""

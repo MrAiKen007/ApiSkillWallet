@@ -1,2 +1,42 @@
 .env
 db.sqlite3
+
+# Ambiente virtual
+venv/
+ENV/
+env/
+
+# Arquivos do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Banco de dados SQLite
+*.sqlite3
+
+# Configurações do VSCode e outros editores
+.vscode/
+.idea/
+*.swp
+
+# Arquivos temporários e de cache
+*.log
+*.pot
+*.pyc
+.DS_Store
+*.orig
+
+# Arquivos do sistema
+Thumbs.db
+
+# Django static/media
+/staticfiles/
+/media/
+
+# Arquivo de env (segredos como chaves API)
+.env
+
+# Arquivos de migração (opcional, mas cuidado!)
+**/migrations/*.py
+**/migrations/*.pyc
+!**/migrations/__init__.py

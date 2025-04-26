@@ -1,22 +1,26 @@
 import base64
-import hashlib
 import json
 import logging
 import requests
 
+from django.conf import settings
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet, InvalidToken
-from django.conf import settings
 from mnemonic import Mnemonic
+
+# Tentativa de import do TonWallet; suprimir erro do Pylance se não estiver no ambiente.
+try:
+    from tonpy import TonWallet  # type: ignore
+except ImportError:
+    TonWallet = None  # type: ignore
+
 from tonsdk.contract.wallet import Wallets, WalletVersionEnum
 from tonsdk.crypto.exceptions import InvalidMnemonicsError
 
 logger = logging.getLogger(__name__)
 
-# Exceção personalizada
 class BlockchainError(Exception):
     """Exceção genérica para erros de blockchain"""
     pass
@@ -25,29 +29,23 @@ class BlockchainError(Exception):
 CRYPTO_ITERATIONS = 600_000  # OWASP recomenda ≥100k iterações
 
 # ======= GERAÇÃO DE CARTEIRA =======
-def create_wallet(version: str = WalletVersionEnum.v4r2.value, workchain: int = 0):
+def create_wallet():
     """
-    Gera uma nova carteira TON: cria seed, deriva chaves e endereço.
-    Retorna: (address: str, private_key_hex: str)
+    Gera uma nova carteira TON usando TonWallet (tonpy).
+    Retorna:
+        address (str): endereço público da carteira
+        private_key (str): chave privada em hex
     """
-    # Gerar seed phrase BIP-39
-    seed_phrase = Mnemonic("english").generate(strength=256)
-    words = seed_phrase.strip().split()
+    if TonWallet is None:
+        raise BlockchainError("Biblioteca tonpy não está instalada. Instale com 'pip install tonpy'.")
     try:
-        # from_mnemonics => (pubkey, privkey, wallet_id, wallet_obj)
-        pubkey_bytes, privkey_bytes, _, wallet_obj = Wallets.from_mnemonics(
-            words, version, workchain
-        )
-    except InvalidMnemonicsError:
-        raise BlockchainError("Falha ao gerar carteira: seed inválida gerada.")
-    # Formatação
-    address = wallet_obj.address.to_string(
-        bounceable=True,
-        test_only=(workchain != 0),
-        user_friendly=True
-    )
-    private_key_hex = privkey_bytes.hex()
-    return address, private_key_hex
+        wallet = TonWallet()
+        address = wallet.get_address()
+        private_key = wallet.get_private_key()
+        return address, private_key
+    except Exception as e:
+        logger.exception("Erro ao gerar carteira TON")
+        raise BlockchainError(f"Falha ao gerar carteira TON: {e}")
 
 # ======= SEED PHRASE =======
 def generate_seed_phrase(strength: int = 256) -> str:
@@ -126,6 +124,7 @@ def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
         logger.error("Erro ao derivar chave privada para assinatura: %s", e)
         raise BlockchainError("Falha ao derivar chave privada para assinatura.")
 
+    from cryptography.hazmat.primitives.asymmetric import ed25519
     private_key = ed25519.Ed25519PrivateKey.from_private_bytes(private_key_bytes)
     data = json.dumps(payload, separators=(',', ':')).encode()
     return private_key.sign(data)

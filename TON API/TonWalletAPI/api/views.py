@@ -13,14 +13,14 @@ from django.db import transaction
 from .models import User, Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
 from .utils import (
-    generate_seed_phrase,
-    validate_seed_phrase,
+    create_wallet,
     encrypt_seed,
     decrypt_seed,
     sign_transaction,
     broadcast_transaction,
-    BlockchainError,
-    derive_keys_and_address
+    validate_seed_phrase,
+    derive_keys_and_address,
+    BlockchainError
 )
 
 import time
@@ -50,52 +50,53 @@ class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        data = request.data
+        required_fields = {'email', 'password'}
+        if missing := required_fields - set(data.keys()):
+            return Response(
+                {"error": f"Campos obrigatórios faltando: {', '.join(missing)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = data['email'].lower().strip()
+        password = data['password']
+
+        if User.objects.filter(email=email).exists():
+            return Response({"error": "Email já registrado"}, status=status.HTTP_409_CONFLICT)
+
         try:
-            data = request.data
-            required_fields = {'email', 'password'}
-            if missing := required_fields - set(data.keys()):
-                return Response(
-                    {"error": f"Campos obrigatórios faltando: {', '.join(missing)}"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            validate_password(password)
+        except ValidationError as e:
+            return Response({"error": ", ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
-            email = data['email'].lower().strip()
-            password = data['password']
-
-            if User.objects.filter(email=email).exists():
-                return Response({"error": "Email já registrado"}, status=status.HTTP_409_CONFLICT)
-
-            try:
-                validate_password(password)
-            except ValidationError as e:
-                return Response({"error": ", ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
-
-            seed = generate_seed_phrase()
-            public_key, address = derive_keys_and_address(seed)
-
-            with transaction.atomic():
-                user = User.objects.create_user(
-                    email=email,
-                    password=password,
-                    seed_phrase=encrypt_seed(seed),
-                    public_key=public_key
-                )
-                Wallet.objects.create(
-                    user=user,
-                    token_type='TON',
-                    contract_address=address
-                )
-
-            return Response({
-                "public_key": public_key,
-                "contract_address": address,
-                "seed_phrase": seed,
-                "warning": "ESTA É A ÚNICA VEZ QUE A SEED PHRASE SERÁ EXIBIDA! GUARDE COM SEGURANÇA!"
-            }, status=status.HTTP_201_CREATED)
-
+        # Gera carteira TON usando utilitário create_wallet
+        try:
+            address, private_key = create_wallet()
         except Exception as e:
-            logger.exception("Erro em RegisterView")
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Erro ao criar carteira TON")
+            return Response({"error": "Falha ao gerar carteira"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Encripta a chave privada para armazenamento
+        encrypted_seed = encrypt_seed(private_key)
+
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                seed_phrase=encrypted_seed,
+                public_key=address
+            )
+            Wallet.objects.create(
+                user=user,
+                token_type='TON',
+                contract_address=address
+            )
+
+        return Response({
+            "contract_address": address,
+            "private_key": private_key,
+            "warning": "ESTA É A ÚNICA VEZ QUE A CHAVE PRIVADA SERÁ EXIBIDA! GUARDE COM SEGURANÇA!"
+        }, status=status.HTTP_201_CREATED)
 
 
 class ImportWalletView(APIView):
@@ -162,17 +163,17 @@ class LoginView(APIView):
 
     def post(self, request):
         email = request.data.get('email')
-        seed_phrase = request.data.get('seed_phrase')
+        private_key = request.data.get('private_key')
 
-        if not email or not seed_phrase:
-            return Response({"error": "Email e seed phrase são obrigatórios"}, status=status.HTTP_400_BAD_REQUEST)
+        if not email or not private_key:
+            return Response({"error": "Email e chave privada são obrigatórios"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = User.objects.get(email=email)
             decrypted = decrypt_seed(user.seed_phrase)
 
-            if seed_phrase != decrypted:
-                return Response({"error": "Seed phrase inválida"}, status=status.HTTP_401_UNAUTHORIZED)
+            if private_key != decrypted:
+                return Response({"error": "Chave privada inválida"}, status=status.HTTP_401_UNAUTHORIZED)
 
             token = create_jwt_token(user)
             return Response({
@@ -248,19 +249,39 @@ class TonWebhook(APIView):
     def post(self, request):
         try:
             event = request.data.get('event')
-            logger.info(f"Evento recebido: {event.get('type')}"+
-                        " com dados: %s", event.get('data'))
+            if not event:
+                return Response({"error": "Evento não fornecido"}, status=status.HTTP_400_BAD_REQUEST)
 
-            if event and event.get('type') == 'transaction':
+            logger.info(f"Evento recebido: {event.get('type')} com dados: %s", event.get('data'))
+
+            if event.get('type') == 'transaction':
                 self.handle_transaction(event.get('data'))
 
             return Response({"status": "processed"}, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.exception("Erro ao processar webhook")
-            return Response({"error": "Erro interno"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def handle_transaction(self, data):
-        logger.info(f"Processando transação: {data}")
-        # Implemente aqui a lógica para atualizar o status das transações
-        pass
+        try:
+            tx_hash = data.get('hash')
+            status_update = data.get('status', 'confirmed')
+
+            if not tx_hash:
+                logger.error("Hash da transação ausente nos dados recebidos")
+                return
+
+            transaction = Transaction.objects.filter(tx_hash=tx_hash).first()
+
+            if not transaction:
+                logger.warning(f"Transação com hash {tx_hash} não encontrada")
+                return
+
+            transaction.status = status_update
+            transaction.save()
+
+            logger.info(f"Transação {tx_hash} atualizada para status: {status_update}")
+
+        except Exception:
+            logger.exception("Erro ao atualizar a transação no handle_transaction")

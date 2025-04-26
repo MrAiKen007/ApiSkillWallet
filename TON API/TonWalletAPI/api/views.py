@@ -13,7 +13,7 @@ from django.db import transaction
 from .models import User, Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
 from .utils import (
-    create_wallet,
+    generate_seed_phrase,
     encrypt_seed,
     decrypt_seed,
     sign_transaction,
@@ -69,34 +69,39 @@ class RegisterView(APIView):
         except ValidationError as e:
             return Response({"error": ", ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Gera carteira TON usando utilitário create_wallet
         try:
-            address, private_key = create_wallet()
+            # Gera nova seed phrase
+            seed_phrase = generate_seed_phrase()
+            keys = derive_keys_and_address(' '.join(seed_phrase))
+            
+            # Encripta a seed phrase para armazenamento
+            encrypted_seed = encrypt_seed(' '.join(seed_phrase))
+
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    email=email,
+                    password=password,
+                    seed_phrase=encrypted_seed,
+                    public_key=keys['public_key']
+                )
+                Wallet.objects.create(
+                    user=user,
+                    token_type='TON',
+                    contract_address=keys['address']
+                )
+
+            return Response({
+                "address": keys['address'],
+                "seed_phrase": ' '.join(seed_phrase),
+                "warning": "GUARDE ESTA SEED PHRASE COM SEGURANÇA! ELA NÃO SERÁ EXIBIDA NOVAMENTE!"
+            }, status=status.HTTP_201_CREATED)
+
+        except BlockchainError as e:
+            logger.exception("Erro na blockchain")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
-            logger.exception("Erro ao criar carteira TON")
-            return Response({"error": "Falha ao gerar carteira"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # Encripta a chave privada para armazenamento
-        encrypted_seed = encrypt_seed(private_key)
-
-        with transaction.atomic():
-            user = User.objects.create_user(
-                email=email,
-                password=password,
-                seed_phrase=encrypted_seed,
-                public_key=address
-            )
-            Wallet.objects.create(
-                user=user,
-                token_type='TON',
-                contract_address=address
-            )
-
-        return Response({
-            "contract_address": address,
-            "private_key": private_key,
-            "warning": "ESTA É A ÚNICA VEZ QUE A CHAVE PRIVADA SERÁ EXIBIDA! GUARDE COM SEGURANÇA!"
-        }, status=status.HTTP_201_CREATED)
+            logger.exception("Erro geral")
+            return Response({"error": "Falha interna no servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ImportWalletView(APIView):
@@ -117,9 +122,9 @@ class ImportWalletView(APIView):
             if not validate_seed_phrase(seed_phrase):
                 return Response({"error": "Seed phrase inválida"}, status=status.HTTP_400_BAD_REQUEST)
 
-            public_key, address = derive_keys_and_address(seed_phrase)
+            keys = derive_keys_and_address(seed_phrase)
 
-            if User.objects.filter(public_key=public_key).exists():
+            if User.objects.filter(public_key=keys['public_key']).exists():
                 return Response({"error": "Carteira já registrada"}, status=status.HTTP_409_CONFLICT)
 
             with transaction.atomic():
@@ -127,34 +132,25 @@ class ImportWalletView(APIView):
                     email=data['email'].lower().strip(),
                     password=data['password'],
                     seed_phrase=encrypt_seed(seed_phrase),
-                    public_key=public_key
+                    public_key=keys['public_key']
                 )
                 Wallet.objects.create(
                     user=user,
                     token_type='TON',
-                    contract_address=address
+                    contract_address=keys['address']
                 )
 
             return Response({
-                "public_key": public_key,
-                "contract_address": address,
-                "message": "Carteira importada com sucesso",
-                "warning": "Guarde suas credenciais com segurança!"
+                "public_key": keys['public_key'],
+                "address": keys['address'],
+                "message": "Carteira importada com sucesso"
             }, status=status.HTTP_201_CREATED)
 
+        except BlockchainError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.exception("Erro em ImportWalletView")
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    def get(self, request):
-        return Response({
-            "description": "Importe uma carteira TON existente usando email, senha e seed phrase",
-            "instruções": {
-                "1": "Forneça email, senha e seed phrase válida",
-                "2": "A seed phrase deve conter 24 palavras no formato BIP-39",
-                "3": "A chave pública e o address serão gerados automaticamente"
-            }
-        })
+            return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class LoginView(APIView):
@@ -163,17 +159,15 @@ class LoginView(APIView):
 
     def post(self, request):
         email = request.data.get('email')
-        private_key = request.data.get('private_key')
+        password = request.data.get('password')
 
-        if not email or not private_key:
-            return Response({"error": "Email e chave privada são obrigatórios"}, status=status.HTTP_400_BAD_REQUEST)
+        if not email or not password:
+            return Response({"error": "Email e senha são obrigatórios"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = User.objects.get(email=email)
-            decrypted = decrypt_seed(user.seed_phrase)
-
-            if private_key != decrypted:
-                return Response({"error": "Chave privada inválida"}, status=status.HTTP_401_UNAUTHORIZED)
+            if not user.check_password(password):
+                return Response({"error": "Credenciais inválidas"}, status=status.HTTP_401_UNAUTHORIZED)
 
             token = create_jwt_token(user)
             return Response({
@@ -222,7 +216,8 @@ class SendTransactionView(APIView):
                 "timestamp": int(time.time())
             }
 
-            signature = sign_transaction(decrypt_seed(request.user.seed_phrase), tx_data)
+            seed_phrase = decrypt_seed(request.user.seed_phrase)
+            signature = sign_transaction(seed_phrase, tx_data)
             result = broadcast_transaction(tx_data, signature)
 
             Transaction.objects.create(
@@ -236,10 +231,13 @@ class SendTransactionView(APIView):
 
             return Response({"tx_hash": result.get('hash')}, status=status.HTTP_200_OK)
 
-        except BlockchainError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:
             return Response({"error": "Destinatário não encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        except BlockchainError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Erro ao enviar transação")
+            return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class TonWebhook(APIView):
@@ -252,7 +250,7 @@ class TonWebhook(APIView):
             if not event:
                 return Response({"error": "Evento não fornecido"}, status=status.HTTP_400_BAD_REQUEST)
 
-            logger.info(f"Evento recebido: {event.get('type')} com dados: %s", event.get('data'))
+            logger.info(f"Evento recebido: {event.get('type')}")
 
             if event.get('type') == 'transaction':
                 self.handle_transaction(event.get('data'))
@@ -268,20 +266,11 @@ class TonWebhook(APIView):
             tx_hash = data.get('hash')
             status_update = data.get('status', 'confirmed')
 
-            if not tx_hash:
-                logger.error("Hash da transação ausente nos dados recebidos")
-                return
-
             transaction = Transaction.objects.filter(tx_hash=tx_hash).first()
+            if transaction:
+                transaction.status = status_update
+                transaction.save()
+                logger.info(f"Transação {tx_hash} atualizada para {status_update}")
 
-            if not transaction:
-                logger.warning(f"Transação com hash {tx_hash} não encontrada")
-                return
-
-            transaction.status = status_update
-            transaction.save()
-
-            logger.info(f"Transação {tx_hash} atualizada para status: {status_update}")
-
-        except Exception:
-            logger.exception("Erro ao atualizar a transação no handle_transaction")
+        except Exception as e:
+            logger.error(f"Erro ao atualizar transação: {str(e)}")

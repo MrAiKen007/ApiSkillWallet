@@ -2,63 +2,47 @@ import base64
 import json
 import logging
 import requests
+from functools import lru_cache
 
 from django.conf import settings
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet, InvalidToken
-from mnemonic import Mnemonic
 
-# Tentativa de import do TonWallet; suprimir erro do Pylance se não estiver no ambiente.
-try:
-    from tonpy import TonWallet  # type: ignore
-except ImportError:
-    TonWallet = None  # type: ignore
-
-from tonsdk.contract.wallet import Wallets, WalletVersionEnum
-from tonsdk.crypto.exceptions import InvalidMnemonicsError
+from tonsdk.contract.wallet import WalletV4ContractR2
+from tonsdk.crypto import (
+    mnemonic_new,
+    mnemonic_to_wallet_key,
+    mnemonic_is_valid,  # Nome corrigido
+    InvalidMnemonicsError,
+)
+from tonsdk.utils import Address, bytes_to_b64str
 
 logger = logging.getLogger(__name__)
 
+# Configurações
+CRYPTO_ITERATIONS = 600_000
+
 class BlockchainError(Exception):
-    """Exceção genérica para erros de blockchain"""
+    """Exceção genérica para erros relacionados à blockchain."""
     pass
 
-# Configurações
-CRYPTO_ITERATIONS = 600_000  # OWASP recomenda ≥100k iterações
+# ======= GERAÇÃO E VALIDAÇÃO DE SEED =======
 
-# ======= GERAÇÃO DE CARTEIRA =======
-def create_wallet():
-    """
-    Gera uma nova carteira TON usando TonWallet (tonpy).
-    Retorna:
-        address (str): endereço público da carteira
-        private_key (str): chave privada em hex
-    """
-    if TonWallet is None:
-        raise BlockchainError("Biblioteca tonpy não está instalada. Instale com 'pip install tonpy'.")
-    try:
-        wallet = TonWallet()
-        address = wallet.get_address()
-        private_key = wallet.get_private_key()
-        return address, private_key
-    except Exception as e:
-        logger.exception("Erro ao gerar carteira TON")
-        raise BlockchainError(f"Falha ao gerar carteira TON: {e}")
-
-# ======= SEED PHRASE =======
-def generate_seed_phrase(strength: int = 256) -> str:
-    """Gera uma seed phrase BIP-39 segura (24 palavras)."""
-    return Mnemonic("english").generate(strength=strength)
+def generate_seed_phrase(words_count: int = 24) -> list[str]:
+    if words_count not in (12, 15, 18, 24):
+        raise ValueError("words_count deve ser 12, 15, 18 ou 24")
+    return mnemonic_new(words_count=words_count)
 
 def validate_seed_phrase(phrase: str) -> bool:
-    """Valida uma seed phrase usando padrão BIP-39."""
-    return Mnemonic("english").check(phrase)
+    words = phrase.strip().split()
+    return mnemonic_is_valid(words)  # Função corrigida
 
-# ======= CRIPTOGRAFIA =======
+# ======= CRIPTOGRAFIA LOCAL =======
+
+@lru_cache(maxsize=1)
 def derive_crypto_key() -> bytes:
-    """Deriva chave para Fernet usando SECRET_KEY e CRYPTO_SALT."""
     salt = settings.CRYPTO_SALT.encode() if isinstance(settings.CRYPTO_SALT, str) else settings.CRYPTO_SALT
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA512(),
@@ -70,71 +54,69 @@ def derive_crypto_key() -> bytes:
     return base64.urlsafe_b64encode(kdf.derive(settings.SECRET_KEY.encode()))
 
 def encrypt_seed(seed: str) -> str:
-    """Criptografa a seed ou private key usando Fernet."""
     cipher = Fernet(derive_crypto_key())
     return cipher.encrypt(seed.encode()).decode()
 
 def decrypt_seed(encrypted: str) -> str:
-    """Descriptografa a seed ou private key."""
     cipher = Fernet(derive_crypto_key())
     try:
         return cipher.decrypt(encrypted.encode()).decode()
-    except InvalidToken as e:
-        logger.error("Falha na descriptografia (token inválido): %r", e)
-        raise BlockchainError("Falha na descriptografia: token inválido")
+    except InvalidToken:
+        raise BlockchainError("Token de descriptografia inválido.")
     except Exception as e:
-        logger.exception("Erro inesperado na descriptografia")
-        raise BlockchainError("Falha na descriptografia: erro interno")
+        logger.exception("Erro inesperado na descriptografia: %s", e)
+        raise BlockchainError("Erro interno na descriptografia.")
 
 # ======= DERIVAÇÃO DE CHAVES =======
-def derive_keys_and_address(seed_phrase: str, version: str = WalletVersionEnum.v4r2.value, workchain: int = 0):
-    """Deriva a public key e endereço TON de uma seed phrase."""
+
+def derive_keys_and_address(seed_phrase: str, workchain: int = 0) -> dict[str, str]:
     words = seed_phrase.strip().split()
     try:
-        _, pubkey_bytes, _, wallet_obj = Wallets.from_mnemonics(words, version, workchain)
-    except InvalidMnemonicsError:
-        raise BlockchainError(
-            "Seed phrase inválida para derivação offline. Por favor, verifique as 24 palavras."
+        key_pair = mnemonic_to_wallet_key(words)
+        
+        wallet = WalletV4ContractR2(
+            public_key=key_pair.public.key,
+            workchain=workchain
         )
+        
+        return {
+            "private_key": key_pair.secret.key.hex(),
+            "public_key": key_pair.public.key.hex(),
+            "address": wallet.address.to_string(
+                bounceable=True,
+                test_only=(workchain != 0),
+                user_friendly=True
+            )
+        }
+    except InvalidMnemonicsError:
+        raise BlockchainError("Seed phrase inválida.")
     except Exception as e:
-        logger.error("Erro inesperado na derivação offline: %s", e)
-        raise BlockchainError("Falha na derivação offline de endereço")
-
-    public_key_hex = pubkey_bytes.hex()
-    address = wallet_obj.address.to_string(
-        bounceable=True,
-        test_only=(workchain != 0),
-        user_friendly=True
-    )
-    return public_key_hex, address
+        logger.error("Erro na derivação: %s", e)
+        raise BlockchainError("Erro ao derivar chaves e endereço.")
 
 # ======= ASSINATURA =======
-def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
-    """Assina payload JSON usando Ed25519 derivado da seed."""
-    if not validate_seed_phrase(seed_phrase):
-        raise BlockchainError("Seed phrase inválida para assinatura.")
-    words = seed_phrase.strip().split()
-    try:
-        _, private_key_bytes, _, _ = Wallets.from_mnemonics(
-            words,
-            WalletVersionEnum.v4r2.value,
-            0
-        )
-    except Exception as e:
-        logger.error("Erro ao derivar chave privada para assinatura: %s", e)
-        raise BlockchainError("Falha ao derivar chave privada para assinatura.")
 
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-    private_key = ed25519.Ed25519PrivateKey.from_private_bytes(private_key_bytes)
-    data = json.dumps(payload, separators=(',', ':')).encode()
-    return private_key.sign(data)
+def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
+    words = seed_phrase.strip().split()
+    if not mnemonic_is_valid(words):  # Função corrigida
+        raise BlockchainError("Seed phrase inválida para assinatura.")
+
+    try:
+        key_pair = mnemonic_to_wallet_key(words)
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(key_pair.secret.key)
+        data = json.dumps(payload, separators=(',', ':')).encode()
+        return private_key.sign(data)
+    except Exception as e:
+        logger.error("Falha ao assinar payload: %s", e)
+        raise BlockchainError("Erro na assinatura de payload.")
 
 # ======= BROADCAST =======
+
 def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
-    """Envia uma transação assinada para um nó via TON_NODE_URL."""
     rpc_url = getattr(settings, "TON_NODE_URL", None)
     if not rpc_url:
-        raise BlockchainError("TON_NODE_URL não configurado para broadcast")
+        raise BlockchainError("TON_NODE_URL não configurado.")
 
     payload = {
         "jsonrpc": "2.0",
@@ -150,9 +132,19 @@ def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
     headers = {"Content-Type": "application/json"}
 
     try:
-        resp = requests.post(rpc_url, json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return resp.json().get("result", {})
+        response = requests.post(rpc_url, json=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            logger.error("Erro do nó TON: %s", data["error"])
+            raise BlockchainError(f"Erro do nó TON: {data['error']}")
+        return data.get("result", {})
+    except requests.Timeout:
+        logger.exception("Timeout ao tentar broadcastar transação.")
+        raise BlockchainError("Timeout ao enviar transação.")
     except requests.RequestException as e:
-        logger.exception("Erro ao enviar transação para o nó.")
-        raise BlockchainError(f"Erro ao broadcastar transação: {e}")
+        logger.exception("Erro HTTP ao enviar transação: %s", e)
+        raise BlockchainError(f"Falha de conexão: {e}")
+    except Exception as e:
+        logger.exception("Erro inesperado no broadcast: %s", e)
+        raise BlockchainError("Erro interno no broadcast.")

@@ -73,7 +73,7 @@ def derive_keys_and_address(seed_phrase: str, workchain: int = 0) -> dict[str, s
     words = seed_phrase.strip().split()
     try:
         public_key, private_key = mnemonic_to_wallet_key(words)
-        wallet = WalletV4ContractR2(public_key=public_key, workchain=workchain)
+        wallet = WalletV4ContractR2(public_key=public_key, private_key=private_key, workchain=workchain)
         return {
             "private_key": private_key.hex(),
             "public_key": public_key.hex(),

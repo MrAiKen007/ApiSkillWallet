@@ -10,12 +10,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet, InvalidToken
 
+from tonsdk.crypto.exceptions import InvalidMnemonicsError
 from tonsdk.contract.wallet import WalletV4ContractR2
 from tonsdk.crypto import (
     mnemonic_new,
     mnemonic_to_wallet_key,
-    mnemonic_is_valid,  # Nome corrigido
-    InvalidMnemonicsError,
+    mnemonic_is_valid,
 )
 from tonsdk.utils import Address, bytes_to_b64str
 

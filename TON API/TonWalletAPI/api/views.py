@@ -9,10 +9,11 @@ from .utils import (
     validate_seed_phrase,
     encrypt_seed,
     decrypt_seed,
-    get_public_key,
     sign_transaction,
     broadcast_transaction,
-    BlockchainError
+    BlockchainError,
+    get_public_key, 
+    derive_ton_address_onchain
 )
 from .serializers import WalletSerializer, TransactionSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -44,8 +45,8 @@ def create_jwt_token(user):
     return str(refresh.access_token)
 
 class RegisterView(APIView):
-    authentication_classes = []  # Desabilita autenticação JWT
-    permission_classes = [AllowAny]  # Permite acesso público
+    authentication_classes = []       # Desabilita autenticação JWT
+    permission_classes = [AllowAny]   # Permite acesso público
 
     def post(self, request):
         """Registro de nova carteira TON com seed phrase gerada automaticamente"""
@@ -79,11 +80,14 @@ class RegisterView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Geração segura de seed phrase
+            # 1. Geração da seed phrase
             seed = generate_seed_phrase()
+            # 2. Derivar a public key (hex 64 chars)
             public_key = get_public_key(seed)
+            # 3. Derivar o address diretamente da blockchain
+            address = derive_ton_address_onchain(public_key)
 
-            # Criação do usuário com transação atômica
+            # Criação do usuário e da wallet em transação atômica
             with transaction.atomic():
                 user = User.objects.create_user(
                     email=email,
@@ -91,24 +95,28 @@ class RegisterView(APIView):
                     seed_phrase=encrypt_seed(seed),
                     public_key=public_key
                 )
-
                 Wallet.objects.create(
                     user=user,
                     token_type='TON',
-                    contract_address='EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c'
+                    contract_address=address
                 )
 
             # Resposta de sucesso
             return Response({
                 "public_key": public_key,
+                "contract_address": address,
                 "seed_phrase": seed,
                 "warning": "ESTA É A ÚNICA VEZ QUE A SEED PHRASE SERÁ EXIBIDA! GUARDE COM SEGURANÇA!"
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            # Log de erro detalhado
+            import traceback, logging
+            logging.getLogger(__name__).exception("Erro em RegisterView")
             return Response(
-                {"error": "Erro interno no processamento do registro"},
+                {
+                    "error": str(e),
+                    "trace": traceback.format_exc()
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

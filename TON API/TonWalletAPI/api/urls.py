@@ -6,7 +6,7 @@ from .views import (
     WalletView,
     SendTransactionView,
     TonWebhook,
-    api_root  # Nova view
+    api_root
 )
 
 urlpatterns = [

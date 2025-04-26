@@ -188,38 +188,3 @@ FERNET_KEY = base64.urlsafe_b64encode(
         iterations=600000
     ).derive(os.getenv('CRYPTO_SECRET').encode())
 )
-
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "verbose": {
-            "format": "{levelname} {asctime} {name} {module}:{lineno} {message}",
-            "style": "{",
-        },
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "verbose",
-        },
-        "file": {
-            "class": "logging.FileHandler",
-            "filename": BASE_DIR / "debug.log",
-            "formatter": "verbose",
-        },
-    },
-    "loggers": {
-        # raiz captura TODO
-        "": {
-            "handlers": ["console", "file"],
-            "level": "DEBUG",
-        },
-        # logger do seu app
-        "api": {
-            "handlers": ["console", "file"],
-            "level": "DEBUG",
-            "propagate": False,
-        },
-    },
-}

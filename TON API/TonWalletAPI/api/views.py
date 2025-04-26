@@ -9,6 +9,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.conf import settings
+
+from tonsdk.utils import Address
+from tonsdk.provider import ToncenterClient
 
 from .models import User, Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
@@ -184,16 +188,41 @@ class WalletView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        wallets = request.user.wallets.all()
-        transactions = Transaction.objects.filter(
+        # 1) Deriva public_key e endereço
+        keys = derive_keys_and_address(request.user.seed_phrase)
+        address_str = keys["address"]
+        public_key = keys["public_key"]
+
+        # 2) Seleciona RPC (testnet ou mainnet)
+        rpc_url = settings.TONCENTER_RPC_URL if getattr(settings, 'USE_TESTNET', False) else settings.TON_NODE_URL
+        client = ToncenterClient(
+        endpoint='https://testnet.toncenter.com/api/v2',  # Testnet
+        api_key='SEU_API_KEY_AQUI',                      # Coloque sua chave se tiver
+        timeout=10
+        )
+        # 3) Consulta estado da conta na blockchain
+        account = client.get_account_state(Address(address_str))
+        balance = f"{account.balance / 1e9:.9f}"  # nanotons -> TON
+
+        # 4) Busca transações do usuário
+        tx_qs = Transaction.objects.filter(
             Q(sender=request.user) | Q(receiver=request.user)
         ).order_by('-timestamp')[:50]
+        tx_data = TransactionSerializer(tx_qs, many=True).data
 
-        return Response({
-            "public_key": request.user.public_key,
-            "wallets": WalletSerializer(wallets, many=True).data,
-            "transactions": TransactionSerializer(transactions, many=True).data
-        })
+        # 5) Monta e retorna resposta
+        payload = {
+            "public_key": public_key,
+            "wallets": [
+                {
+                    "token_type": "TON",
+                    "balance": balance,
+                    "contract_address": address_str,
+                }
+            ],
+            "transactions": tx_data,
+        }
+        return Response(payload, status=200)
 
 
 class SendTransactionView(APIView):

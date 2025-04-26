@@ -72,22 +72,17 @@ def decrypt_seed(encrypted: str) -> str:
 def derive_keys_and_address(seed_phrase: str, workchain: int = 0) -> dict[str, str]:
     words = seed_phrase.strip().split()
     try:
-        key_pair = mnemonic_to_wallet_key(words)
-        
-        wallet = WalletV4ContractR2(
-            public_key=key_pair.public.key,
-            workchain=workchain
-        )
-        
+        public_key, private_key = mnemonic_to_wallet_key(words)
+        wallet = WalletV4ContractR2(public_key=public_key, workchain=workchain)
         return {
-            "private_key": key_pair.secret.key.hex(),
-            "public_key": key_pair.public.key.hex(),
+            "private_key": private_key.hex(),
+            "public_key": public_key.hex(),
             "address": wallet.address.to_string(
-                bounceable=True,
-                test_only=(workchain != 0),
-                user_friendly=True
-            )
-        }
+                 bounceable=True,
+                 test_only=(workchain != 0),
+                 user_friendly=True
+       )
+    }
     except InvalidMnemonicsError:
         raise BlockchainError("Seed phrase inválida.")
     except Exception as e:

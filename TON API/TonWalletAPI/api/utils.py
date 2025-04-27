@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet, InvalidToken
 
+from tonsdk.utils import Address
 from tonsdk.contract.wallet import Wallets, WalletVersionEnum
 from tonsdk.crypto import (
     mnemonic_new,
@@ -34,7 +35,6 @@ def generate_seed_phrase(words_count: int = 24) -> list[str]:
         raise ValueError("words_count deve ser 12, 15, 18 ou 24")
     return mnemonic_new(words_count=words_count)
 
-
 def validate_seed_phrase(phrase: str) -> bool:
     """Valida se a phrase fornecida é uma seed válida."""
     words = phrase.strip().split()
@@ -44,7 +44,7 @@ def validate_seed_phrase(phrase: str) -> bool:
 
 @lru_cache(maxsize=1)
 def derive_crypto_key() -> bytes:
-    """Deriva uma chave simétrica para criptografia local a partir de settings.SECRET_KEY."""
+    """Deriva uma chave simétrica para criptografia local."""
     salt = settings.CRYPTO_SALT
     if isinstance(salt, str):
         salt = salt.encode()
@@ -58,15 +58,13 @@ def derive_crypto_key() -> bytes:
     )
     return base64.urlsafe_b64encode(kdf.derive(settings.SECRET_KEY.encode()))
 
-
 def encrypt_seed(seed: str) -> str:
     """Encripta a seed phrase para armazenamento seguro."""
     cipher = Fernet(derive_crypto_key())
     return cipher.encrypt(seed.encode()).decode()
 
-
 def decrypt_seed(encrypted: str) -> str:
-    """Desencripta a seed armazenada, lançando BlockchainError em caso de falha."""
+    """Desencripta a seed armazenada."""
     cipher = Fernet(derive_crypto_key())
     try:
         return cipher.decrypt(encrypted.encode()).decode()
@@ -78,35 +76,37 @@ def decrypt_seed(encrypted: str) -> str:
 
 # ======= DERIVAÇÃO DE CHAVES E ENDEREÇO =======
 
-def derive_keys_and_address(seed_phrase: str, workchain: int = 0) -> dict[str, str]:
-    """Deriva chaves pública/privada e endereço a partir de uma seed phrase."""
+def derive_keys_and_address(seed_phrase: str) -> dict[str, str]:
+    """Deriva chaves pública/privada e endereço."""
     words = seed_phrase.strip().split()
-    logger.debug("Iniciando derivação com words=%s", words)
+    
+    # Configuração dinâmica
+    workchain = -1 if getattr(settings, 'USE_TESTNET', False) else 0
+    is_testnet = workchain != 0
 
     try:
-        # Utiliza o helper do SDK para derivar chaves e instanciar a carteira
+        # Criação da carteira
         _, public_key, private_key, wallet = Wallets.from_mnemonics(
             mnemonics=words,
             version=WalletVersionEnum.v4r2,
             workchain=workchain
         )
+
+        # Geração do endereço no formato 0QD...
         address = wallet.address.to_string(
+            is_user_friendly=True,
             is_bounceable=True,
-            is_test_only=(workchain != 0),
-            is_user_friendly=True
+            is_test_only=is_testnet
         )
-        logger.debug(
-            "Chaves derivadas public_key=%s private_key=%s address=%s",
-            public_key.hex(), private_key.hex(), address
-        )
+
         return {
             "public_key": public_key.hex(),
-            "private_key": private_key.hex(),
+            "private_key": private_key.hex(),  # Para debug apenas
             "address": address
         }
-    except Exception:
-        logger.exception("Falha completa na derive_keys_and_address")
-        raise BlockchainError("Erro ao derivar chaves e endereço.")
+    except Exception as e:
+        logger.error(f"Falha na derivação: {str(e)}")
+        raise BlockchainError("Erro na geração do endereço")
 
 # ======= ASSINATURA =======
 
@@ -123,7 +123,6 @@ def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
         private_key_obj = ed25519.Ed25519PrivateKey.from_private_bytes(private_key)
         data = json.dumps(payload, separators=(',', ':')).encode()
         signature = private_key_obj.sign(data)
-        logger.debug("Payload assinado signature=%s", signature.hex())
         return signature
     except Exception:
         logger.exception("Falha ao assinar payload")
@@ -132,10 +131,16 @@ def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
 # ======= BROADCAST =======
 
 def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
-    """Envia a transação para um nó TON via JSON-RPC e retorna o resultado."""
-    rpc_url = getattr(settings, "TON_NODE_URL", None)
-    if not rpc_url:
-        raise BlockchainError("TON_NODE_URL não configurado.")
+    """Envia a transação para um nó TON."""
+    rpc_url = (
+        settings.TON_TESTNET_NODE_URL 
+        if getattr(settings, 'USE_TESTNET', False) 
+        else settings.TON_MAINNET_NODE_URL
+    )
+    
+    headers = {"Content-Type": "application/json"}
+    if hasattr(settings, 'TONCENTER_API_KEY'):
+        headers["X-API-Key"] = settings.TONCENTER_API_KEY
 
     payload = {
         "jsonrpc": "2.0",
@@ -148,7 +153,6 @@ def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
             }
         }
     }
-    headers = {"Content-Type": "application/json"}
 
     try:
         response = requests.post(rpc_url, json=payload, headers=headers, timeout=15)
@@ -157,7 +161,6 @@ def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
         if "error" in data:
             logger.error("Erro do nó TON: %s", data["error"])
             raise BlockchainError(f"Erro do nó TON: {data['error']}")
-        logger.debug("Broadcast bem-sucedido result=%s", data.get("result"))
         return data.get("result", {})
     except requests.Timeout:
         logger.exception("Timeout ao tentar broadcastar transação.")

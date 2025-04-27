@@ -20,7 +20,7 @@ from tonsdk.crypto import (
 
 logger = logging.getLogger(__name__)
 
-# Configurações
+
 CRYPTO_ITERATIONS = 600_000
 
 class BlockchainError(Exception):
@@ -94,14 +94,15 @@ def derive_keys_and_address(seed_phrase: str) -> dict[str, str]:
 
         # Geração do endereço no formato 0QD...
         address = wallet.address.to_string(
-            is_user_friendly=True,
-            is_bounceable=True,
-            is_test_only=is_testnet
-        )
+        is_user_friendly=True,
+        is_bounceable=True,
+        is_url_safe=True,
+        is_test_only=is_testnet
+    )
 
         return {
             "public_key": public_key.hex(),
-            "private_key": private_key.hex(),  # Para debug apenas
+            "private_key": private_key.hex(),
             "address": address
         }
     except Exception as e:
@@ -133,7 +134,7 @@ def sign_transaction(seed_phrase: str, payload: dict) -> bytes:
 def broadcast_transaction(tx_data: dict, signature: bytes) -> dict:
     """Envia a transação para um nó TON."""
     rpc_url = (
-        settings.TON_TESTNET_NODE_URL 
+        settings.TON_NODE_URL 
         if getattr(settings, 'USE_TESTNET', False) 
         else settings.TON_MAINNET_NODE_URL
     )

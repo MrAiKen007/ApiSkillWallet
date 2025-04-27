@@ -172,6 +172,7 @@ TONCENTER_RPC_URL = os.getenv("TONCENTER_RPC_URL")
 CRYPTO_SECRET = os.getenv('CRYPTO_SECRET')
 CRYPTO_SALT = os.getenv('CRYPTO_SALT').encode()
 SECRET_KEY = os.getenv('SECRET_KEY') 
+TON_NODE_URL = os.getenv('TON_NODE_URL')
 AUTH_USER_MODEL = 'api.User' 
 
 _CRYPTO_SALT_STR = os.environ.get("CRYPTO_SALT", None)

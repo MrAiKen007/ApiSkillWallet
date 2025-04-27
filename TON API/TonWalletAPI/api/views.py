@@ -33,6 +33,7 @@ from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
+
 @api_view(['GET'])
 def api_root(request, format=None):
     return Response({
@@ -74,11 +75,8 @@ class RegisterView(APIView):
             return Response({"error": ", ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Gera nova seed phrase
             seed_phrase = generate_seed_phrase()
             keys = derive_keys_and_address(' '.join(seed_phrase))
-            
-            # Encripta a seed phrase para armazenamento
             encrypted_seed = encrypt_seed(' '.join(seed_phrase))
 
             with transaction.atomic():
@@ -185,45 +183,50 @@ class LoginView(APIView):
 
 
 class WalletView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # 1) Deriva public_key e endereço
-        keys = derive_keys_and_address(request.user.seed_phrase)
-        address_str = keys["address"]
-        public_key = keys["public_key"]
+        try:
+            seed_phrase = decrypt_seed(request.user.seed_phrase)
+            keys = derive_keys_and_address(seed_phrase)
+            address_str = keys["address"]
+            public_key = keys["public_key"]
 
-        # 2) Seleciona RPC (testnet ou mainnet)
-        rpc_url = settings.TONCENTER_RPC_URL if getattr(settings, 'USE_TESTNET', False) else settings.TON_NODE_URL
-        client = ToncenterClient(
-        endpoint='https://testnet.toncenter.com/api/v2',  # Testnet
-        api_key='SEU_API_KEY_AQUI',                      # Coloque sua chave se tiver
-        timeout=10
-        )
-        # 3) Consulta estado da conta na blockchain
-        account = client.get_account_state(Address(address_str))
-        balance = f"{account.balance / 1e9:.9f}"  # nanotons -> TON
+            if getattr(settings, 'USE_TESTNET', False):
+                rpc_url = settings.TONCENTER_RPC_URL
+            else:
+                rpc_url = settings.TON_NODE_URL
 
-        # 4) Busca transações do usuário
-        tx_qs = Transaction.objects.filter(
-            Q(sender=request.user) | Q(receiver=request.user)
-        ).order_by('-timestamp')[:50]
-        tx_data = TransactionSerializer(tx_qs, many=True).data
+            client = ToncenterClient(
+            base_url=rpc_url,
+            api_key=settings.TONCENTER_API_KEY
+          )
 
-        # 5) Monta e retorna resposta
-        payload = {
-            "public_key": public_key,
-            "wallets": [
-                {
-                    "token_type": "TON",
-                    "balance": balance,
-                    "contract_address": address_str,
-                }
-            ],
-            "transactions": tx_data,
-        }
-        return Response(payload, status=200)
+            account = client.raw_get_account_state(Address(address_str))
+            balance = f"{int(account.get('balance', 0)) / 1e9:.9f}"
+
+
+            tx_qs = Transaction.objects.filter(
+                Q(sender=request.user) | Q(receiver=request.user)
+            ).order_by('-timestamp')[:50]
+            tx_data = TransactionSerializer(tx_qs, many=True).data
+
+            payload = {
+                "public_key": public_key,
+                "wallets": [
+                    {
+                        "token_type": "TON",
+                        "balance": balance,
+                        "contract_address": address_str,
+                    }
+                ],
+                "transactions": tx_data,
+            }
+            return Response(payload, status=200)
+
+        except Exception as e:
+            logger.exception("Erro ao buscar carteira")
+            return Response({"error": "Erro interno ao buscar carteira"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class SendTransactionView(APIView):

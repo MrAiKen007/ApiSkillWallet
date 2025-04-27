@@ -1,279 +1,268 @@
 # ApiSkillWallet
 
-**TonWalletAPI**
+Este documento descreve como configurar e testar cada endpoint da API ApiSkillWallet (TonWalletAPI) para gerenciamento de carteiras e transações na TON Blockchain.
 
-Uma API RESTful construída com Django e Django REST Framework para gerenciar carteiras e transações na TON Blockchain.
+1. Descrição
 
----
+A ApiSkillWallet é uma API RESTful desenvolvida em Django e Django REST Framework que oferece:
 
-## 📝 Descrição
+Registro e autenticação de usuários (JWT).
 
-TonWalletAPI fornece endpoints para:
-- Registro e autenticação de usuários
-- Criação e gerenciamento de carteiras TON
-- Envio e confirmação de transações (Toncoin)
-- Recebimento de webhooks de confirmação
+Criação e gerenciamento de carteiras TON.
 
-A arquitetura segue boas práticas de separação de camadas, utilizando Serializers, ViewSets e Services para manter o código modular e testável.
+Envio e confirmação de transações (Toncoin).
 
----
+Recebimento de webhooks para confirmação de transações.
 
-## 🚀 Funcionalidades Principais
+Documentação interativa via Swagger/OpenAPI.
 
-- **Cadastro e Login** via JSON Web Tokens (JWT)
-- **Criação automática** de carteiras com derivação de chaves seguras (PBKDF2)
-- **Envio de transações** com status `pending` e confirmação via webhook
-- **Endpoints RESTful** gerados com ViewSets e Routers
-- **Documentação interativa** Swagger/OpenAPI com drf-spectacular
-- **Rate Limiting** e **Throttling** para proteger os endpoints
-- **Docker & Docker Compose** para desenvolvimento local
+Proteção com rate limiting e throttling.
 
----
+Containerização com Docker & Docker Compose.
 
-## 📦 Pré-requisitos
+2. Pré-requisitos
 
-- Docker & Docker Compose
-- Python 3.10+
-- Git
+Git
 
----
+Docker >= 20.10
 
-## ⚙️ Instalação e Setup
+Docker Compose >= 1.29
 
-1. Clone o repositório:
-   ```bash
-   git clone https://github.com/MrAiKen007/ApiSkillWallet.git
-   cd ApiSkillWallet/TON\ API/TonWalletAPI
-   ```
+Python 3.10+ (caso queira executar local sem Docker)
 
-2. Crie um arquivo `.env` na raiz com as variáveis abaixo:
-   ```env
-   SECRET_KEY=your_django_secret_key
-   DEBUG=False
-   TON_API_KEY=your_ton_api_key
-   CRYPTO_SALT=your_pbkdf2_salt
-   CRYPTO_SECRET=your_crypto_secret
+3. Configuração do Projeto
 
-   POSTGRES_DB=tonwallet
-   POSTGRES_USER=tonuser
-   POSTGRES_PASSWORD=tonpassword
-   ```
+Clone o repositório
 
-3. Inicialize os containers Docker:
-   ```bash
-   docker-compose up -d --build
-   ```
+git clone https://github.com/MrAiKen007/ApiSkillWallet.git
+cd ApiSkillWallet/TON\ API/TonWalletAPI
 
-4. Aplique migrações e crie superusuário:
-   ```bash
-   docker-compose exec web python manage.py migrate
-   docker-compose exec web python manage.py createsuperuser
-   ```
+Crie o arquivo de variáveis de ambiente .env na raiz do projeto:
 
-5. Acesse a API em `http://localhost:8000/` e a documentação Swagger em `http://localhost:8000/api/docs/`
+SECRET_KEY=your_django_secret_key
+DEBUG=False
+TON_API_KEY=your_ton_api_key
+CRYPTO_SALT=your_pbkdf2_salt
+CRYPTO_SECRET=your_crypto_secret
 
----
+POSTGRES_DB=tonwallet
+POSTGRES_USER=tonuser
+POSTGRES_PASSWORD=tonpassword
 
-## 🔧 Configuração de Ambiente
+Inicie os containers Docker
 
-Ajuste as seguintes configurações em `settings.py` conforme necessário:
+docker-compose up -d --build
 
-- **CORS_ALLOWED_ORIGINS**: defina as origens permitidas na produção
-- **ALLOWED_HOSTS**: inclua seu domínio/host
-- **DEBUG**: NEVER use `True` em produção
+Aplique migrações e crie um superusuário
 
----
+docker-compose exec web python manage.py migrate
+docker-compose exec web python manage.py createsuperuser
 
-## 📖 Uso Básico
+Verifique
 
-### Autenticação 📡
+API disponível em: http://localhost:8000/
 
-Todas as requisições autenticadas devem incluir o header:
+Swagger UI em: http://localhost:8000/api/docs/
 
-```
-Authorization: Bearer <seu_token_jwt>
-```
+4. Autenticação
 
-### Endpoints de Usuário 👤
+Todas as requisições a endpoints protegidos devem incluir o header:
 
-- **Registrar usuário**  
-  `POST /api/auth/register/`  
-  Payload:
-  ```json
-  {
-    "username": "user1",
-    "password": "Pa$$w0rd"
-  }
-  ```
-  Resposta:
-  ```json
-  {
-    "id": 1,
-    "username": "user1"
-  }
-  ```
+Authorization: Bearer <ACCESS_TOKEN>
 
-- **Login (Obter JWT)**  
-  `POST /api/auth/login/`  
-  Payload:
-  ```json
-  {
-    "username": "user1",
-    "password": "Pa$$w0rd"
-  }
-  ```
-  Resposta:
-  ```json
-  {
-    "access": "eyJ0eXAi...",
-    "refresh": "eyJ0eXAi..."
-  }
-  ```
+Os tokens são obtidos via endpoint de login.
 
-### Endpoints de Carteira 🏦
+5. Endpoints e Exemplos de Teste
 
-- **Listar carteiras**  
-  `GET /api/wallets/`  
-  Query params opcionais:
-  - `page`: número da página (padrão: 1)  
-  - `page_size`: itens por página (padrão: 10)  
+5.1. Autenticação de Usuário
 
-  Exemplo:
-  ```bash
-  curl -H "Authorization: Bearer <token>" http://localhost:8000/api/wallets/?page=2&page_size=5
-  ```
-  Resposta:
-  ```json
-  {
-    "count": 12,
-    "next": "...",
-    "previous": "...",
-    "results": [
-      {
-        "id": 5,
-        "address": "EQBg...",
-        "balance": "12.3456"
-      }
-    ]
-  }
-  ```
+5.1.1. Registrar Usuário
 
-- **Criar carteira**  
-  `POST /api/wallets/`  
-  Sem payload. Retorna:
-  ```json
-  {
-    "id": 13,
-    "address": "EQCd...",
-    "balance": "0.0000"
-  }
-  ```
+Método: POST
 
-- **Detalhar carteira**  
-  `GET /api/wallets/<id>/`  
-  Resposta:
-  ```json
-  {
-    "id": 13,
-    "address": "EQCd...",
-    "balance": "0.0000",
-    "created_at": "2025-04-25T12:00:00Z"
-  }
-  ```
+URL: /api/auth/register/
 
-### Endpoints de Transações 💸
+Payload (JSON):
 
-- **Enviar Toncoin**  
-  `POST /api/transactions/send/`  
-  Payload:
-  ```json
-  {
-    "from_wallet": 13,
-    "to_address": "EQBg...",
-    "amount": "0.5",
-    "fee": "0.01"
-  }
-  ```
-  Resposta inicial:
-  ```json
-  {
-    "id": 27,
-    "status": "pending",
-    "to_address": "EQBg...",
-    "amount": "0.5",
-    "fee": "0.01",
-    "created_at": "2025-04-25T12:05:00Z"
-  }
-  ```
+{
+  "username": "usuario1",
+  "password": "Pa$$w0rd123"
+}
 
-- **Listar transações**  
-  `GET /api/transactions/?wallet=<id>`  
-  Filtros opcionais:
-  - `status`: `pending` ou `confirmed`  
-  - `date_from`, `date_to`: filtro por intervalo de datas (YYYY-MM-DD)
+Exemplo cURL:
 
-- **Detalhar transação**  
-  `GET /api/transactions/<id>/`  
+curl -X POST http://localhost:8000/api/auth/register/ \
+     -H "Content-Type: application/json" \
+     -d '{"username":"usuario1","password":"Pa$$w0rd123"}'
 
-- **Webhook de Confirmação**  
-  `POST /api/transactions/webhook/`  
-  Payload enviado pela TON API:
-  ```json
-  {
-    "transaction_id": 27,
-    "status": "confirmed",
-    "block_id": "0:abcd1234...",
-    "timestamp": "2025-04-25T12:06:30Z"
-  }
-  ```
-  Ao receber, a API atualiza `Transaction.status` e ajusta o saldo das carteiras.
+5.1.2. Login (Obter Tokens JWT)
 
-### Tratamento de Erros ⚠️
+Método: POST
 
-- API retorna códigos HTTP padrões (400, 401, 404, 500)  
-- Exemplo de erro 400:
-  ```json
-  {
-    "detail": "Amount must be positive"
-  }
-  ```
+URL: /api/auth/login/
 
----
+Payload (JSON):
 
-## 🛠️ Estrutura de Pastas
+{
+  "username": "usuario1",
+  "password": "Pa$$w0rd123"
+}
 
-```
-TonWalletAPI/
-├── api/
-│   ├── serializers/       # Serializers para validação de dados
-│   ├── services/          # Lógica de negócio (use cases)
-│   ├── viewsets.py        # ViewSets definidos para cada recurso
-│   ├── urls.py            # Roteamento com DefaultRouter
-│   └── tests/             # Testes unitários e de integração
-├── core/
-│   ├── crypto.py          # Derivação de chaves e criptografia
-│   └── settings.py        # Configurações do Django
-├── docker-compose.yml
-├── Dockerfile
-└── manage.py
-```
+Exemplo cURL:
 
----
+curl -X POST http://localhost:8000/api/auth/login/ \
+     -H "Content-Type: application/json" \
+     -d '{"username":"usuario1","password":"Pa$$w0rd123"}'
 
-## 📚 Documentação API
+Resposta (JSON):
 
-Acesse Swagger UI em: `http://<host>/api/docs/` para visualizar e testar todos os endpoints.
+{
+  "access": "<ACCESS_TOKEN>",
+  "refresh": "<REFRESH_TOKEN>"
+}
 
----
+5.2. Endpoints de Carteira
 
-## 🤝 Contribuição
+Importante: todos os exemplos a seguir usam: -H "Authorization: Bearer <ACCESS_TOKEN>"
 
-1. Faça um fork do projeto
-2. Crie uma branch: `git checkout -b feature/nova-funcionalidade`
-3. Commit suas alterações: `git commit -m 'Adiciona nova funcionalidade'`
-4. Push para a branch: `git push origin feature/nova-funcionalidade`
-5. Abra um Pull Request
+5.2.1. Listar Carteiras
 
-Por favor, siga as diretrizes de estilo (Black, isort) e garanta que todos os testes passem.
+Método: GET
 
----
+URL: /api/wallets/
+
+Parâmetros Opcionais:
+
+page: número da página (padrão: 1)
+
+page_size: itens por página (padrão: 10)
+
+Exemplo cURL:
+
+curl http://localhost:8000/api/wallets/?page=1&page_size=5 \
+     -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+5.2.2. Criar Carteira
+
+Método: POST
+
+URL: /api/wallets/
+
+Payload: não requer JSON
+
+Exemplo cURL:
+
+curl -X POST http://localhost:8000/api/wallets/ \
+     -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+5.2.3. Detalhar Carteira
+
+Método: GET
+
+URL: /api/wallets/{id}/
+
+Exemplo cURL:
+
+curl http://localhost:8000/api/wallets/13/ \
+     -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+5.3. Endpoints de Transação
+
+5.3.1. Enviar Toncoin
+
+Método: POST
+
+URL: /api/transactions/send/
+
+Payload (JSON):
+
+{
+  "from_wallet": 13,
+  "to_address": "EQBg...",
+  "amount": "0.5",
+  "fee": "0.01"
+}
+
+Exemplo cURL:
+
+curl -X POST http://localhost:8000/api/transactions/send/ \
+     -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{"from_wallet":13,"to_address":"EQBg...","amount":"0.5","fee":"0.01"}'
+
+5.3.2. Listar Transações
+
+Método: GET
+
+URL: /api/transactions/?wallet={wallet_id}
+
+Filtros Opcionais:
+
+status: pending ou confirmed
+
+date_from, date_to: intervalo YYYY-MM-DD
+
+Exemplo cURL:
+
+curl http://localhost:8000/api/transactions/?wallet=13&status=pending \
+     -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+5.3.3. Detalhar Transação
+
+Método: GET
+
+URL: /api/transactions/{id}/
+
+Exemplo cURL:
+
+curl http://localhost:8000/api/transactions/27/ \
+     -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+5.3.4. Webhook de Confirmação
+
+Método: POST
+
+URL: /api/transactions/webhook/
+
+Payload (TON API Callback):
+
+{
+  "transaction_id": 27,
+  "status": "confirmed",
+  "block_id": "0:abcd1234...",
+  "timestamp": "2025-04-25T12:06:30Z"
+}
+
+Exemplo cURL:
+
+curl -X POST http://localhost:8000/api/transactions/webhook/ \
+     -H "Content-Type: application/json" \
+     -d '{"transaction_id":27,"status":"confirmed","block_id":"0:abcd1234...","timestamp":"2025-04-25T12:06:30Z"}'
+
+6. Testes Automatizados
+
+Para executar os testes unitários e de integração:
+
+docker-compose exec web python manage.py test
+
+7. Documentação Interativa
+
+Acesse o Swagger UI para explorar e testar todos os endpoints:
+
+http://localhost:8000/api/docs/
+
+8. Contribuição
+
+Faça um fork do repositório.
+
+Crie uma branch: git checkout -b feature/nova-funcionalidade.
+
+Commit suas alterações: git commit -m "Adiciona nova funcionalidade".
+
+Push para a branch: git push origin feature/nova-funcionalidade.
+
+Abra um Pull Request.
+
+Por favor, siga o padrão de estilo (Black, isort) e garanta que todos os testes passem.
+
+Boa diversão testando a API!

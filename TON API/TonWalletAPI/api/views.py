@@ -185,7 +185,8 @@ class LoginView(APIView):
 
 
 class WalletView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get(self, request):
         # 1) Deriva public_key e endereço

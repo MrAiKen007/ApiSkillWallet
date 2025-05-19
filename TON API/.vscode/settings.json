@@ -1,0 +1,11 @@
+{
+  "python.pythonPath": "venv\\Scripts\\python.exe",
+  "python.analysis.extraPaths": [
+    "./TonWalletAPI",
+    "./TonWalletAPI/api",
+    "./TonWalletAPI/api/clients"
+  ],
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.stubPaths": [],
+  "python.analysis.useLibraryCodeForTypes": true
+}

@@ -1,9 +1,6 @@
 import base64
-import json
 import logging
-import requests
 from functools import lru_cache
-from pathlib import Path
 
 from django.conf import settings
 from cryptography.hazmat.backends import default_backend
@@ -17,9 +14,9 @@ from tonsdk.crypto import (
     mnemonic_to_wallet_key,
     mnemonic_is_valid,
 )
+from tonsdk.utils import Address  # Derivação de endereço
 
 logger = logging.getLogger(__name__)
-
 CRYPTO_ITERATIONS = 600_000
 
 
@@ -48,7 +45,9 @@ def validate_seed_phrase(phrase: str) -> bool:
 @lru_cache(maxsize=1)
 def derive_crypto_key() -> bytes:
     """Deriva uma chave simétrica para criptografia local."""
-    salt = settings.CRYPTO_SALT.encode() if isinstance(settings.CRYPTO_SALT, str) else settings.CRYPTO_SALT
+    salt = settings.CRYPTO_SALT
+    if isinstance(salt, str):
+        salt = salt.encode()
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA512(),
         length=32,
@@ -80,14 +79,22 @@ def decrypt_seed(encrypted: str) -> str:
 # ======= DERIVAÇÃO DE CHAVES E ENDEREÇO =======
 
 def derive_keys_and_address(seed_phrase: str) -> dict[str, str]:
-    """Deriva chaves pública/privada e retorna a public_key/secret e o endereço user-friendly."""
+    """Deriva chaves pública, privada e endereço user-friendly."""
     words = seed_phrase.strip().split()
     if not mnemonic_is_valid(words):
         raise BlockchainError("Seed phrase inválida.")
-    pubkey, privkey = mnemonic_to_wallet_key(words)
+
+    # Deriva chaves com tonsdk
+    pubkey_bytes, privkey_bytes = mnemonic_to_wallet_key(words)
+
+    # Deriva endereço na workchain 0
+    address_obj = Address(pubkey_bytes, 0)
+    user_address = address_obj.to_string(is_user_friendly=True)
+
     return {
-        "public_key": pubkey.hex(),
-        "private_key": privkey.hex(),
+        "public_key": pubkey_bytes.hex(),
+        "private_key": privkey_bytes.hex(),
+        "address": user_address,
     }
 
 
@@ -104,38 +111,33 @@ def get_account_balance(address: str) -> float:
 
 
 def sign_transaction(from_address: str, to_address: str, amount: float, seed_phrase: str) -> str:
-    """
-    Prepara e assina a transação, retornando a mensagem assinada (BOC base64).
-    """
+    """Assina transação e retorna BOC base64 assinado."""
     keys = derive_keys_and_address(seed_phrase)
     client = PyTONClient()
     try:
-        # Ajuste para o método correto de assinatura no seu cliente
-        signed_boc = client.sign_message(from_address, to_address, amount, keys['private_key'])
-        return signed_boc
+        boc = client.sign_message(
+            from_address=from_address,
+            to_address=to_address,
+            amount=amount,
+            private_key=keys['private_key']
+        )
+        return boc
     except Exception as e:
         logger.exception("Erro ao assinar transação: %s", e)
         raise BlockchainError("Falha ao assinar transação.")
 
 
 def broadcast_transaction(signed_boc: str) -> str:
-    """
-    Envia (broadcast) a mensagem BOC assinada para a rede, retornando o hash da transação.
-    """
+    """Envia o BOC assinado para a rede e retorna o hash da transação."""
     client = PyTONClient()
     try:
-        # Ajuste para o método correto de broadcast no seu cliente
-        tx_hash = client.broadcast_message(signed_boc)
-        return tx_hash
+        return client.broadcast_message(signed_boc)
     except Exception as e:
         logger.exception("Erro ao broadcast da transação: %s", e)
         raise BlockchainError("Falha ao broadcast da transação.")
 
 
 def send_ton(from_address: str, to_address: str, amount: float, seed_phrase: str) -> str:
-    """
-    Assina e envia `amount` TON de from_address para to_address.
-    Retorna o hash da transação.
-    """
-    signed = sign_transaction(from_address, to_address, amount, seed_phrase)
-    return broadcast_transaction(signed)
+    """Assina e envia transação, retornando o hash resultante."""
+    signed_boc = sign_transaction(from_address, to_address, amount, seed_phrase)
+    return broadcast_transaction(signed_boc)

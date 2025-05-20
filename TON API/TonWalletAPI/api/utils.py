@@ -14,7 +14,7 @@ from tonsdk.crypto import (
     mnemonic_to_wallet_key,
     mnemonic_is_valid,
 )
-from tonsdk.utils import Address  # Derivação de endereço
+from tonsdk.utils import Address  # Derivação de endereço correta
 
 logger = logging.getLogger(__name__)
 CRYPTO_ITERATIONS = 600_000
@@ -78,25 +78,35 @@ def decrypt_seed(encrypted: str) -> str:
 
 # ======= DERIVAÇÃO DE CHAVES E ENDEREÇO =======
 
-def derive_keys_and_address(seed_phrase: str) -> dict[str, str]:
+def derive_keys_and_address(seed_phrase: str, testnet: bool = False) -> dict[str, str]:
     """Deriva chaves pública, privada e endereço user-friendly."""
+    from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+    from tonsdk.crypto import mnemonic_is_valid, mnemonic_to_wallet_key
+
     words = seed_phrase.strip().split()
     if not mnemonic_is_valid(words):
         raise BlockchainError("Seed phrase inválida.")
 
-    # Deriva chaves com tonsdk
-    pubkey_bytes, privkey_bytes = mnemonic_to_wallet_key(words)
+    # Deriva mnemonics, chaves e wallet
+    _, pubkey_bytes, privkey_bytes, wallet = Wallets.from_mnemonics(
+        words,
+        WalletVersionEnum.v3r2,
+        0  # workchain
+    )
 
-    # Deriva endereço na workchain 0
-    address_obj = Address(pubkey_bytes, 0)
-    user_address = address_obj.to_string(is_user_friendly=True)
+    # Gera o endereço com flags de testnet/mainnet
+    address_str = wallet.address.to_string(
+    is_user_friendly=True,
+    is_url_safe=True,
+    is_bounceable=False,
+    is_test_only=True,
+)
 
     return {
         "public_key": pubkey_bytes.hex(),
         "private_key": privkey_bytes.hex(),
-        "address": user_address,
+        "address": address_str,
     }
-
 
 # ======= BLOCKCHAIN OPERATIONS via PyTONClient =======
 

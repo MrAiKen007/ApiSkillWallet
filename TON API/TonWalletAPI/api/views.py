@@ -11,9 +11,6 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.conf import settings
 
-from tonsdk.utils import Address
-from tonsdk.provider import ToncenterClient
-
 from .models import User, Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
 from .utils import (
@@ -26,10 +23,11 @@ from .utils import (
     derive_keys_and_address,
     BlockchainError
 )
-
+from decimal import Decimal
 import time
 import logging
-from decimal import Decimal
+
+from api.clients.ton_client import PyTONClient
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +99,7 @@ class RegisterView(APIView):
         except BlockchainError as e:
             logger.exception("Erro na blockchain")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
+        except Exception:
             logger.exception("Erro geral")
             return Response({"error": "Falha interna no servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -150,7 +148,7 @@ class ImportWalletView(APIView):
 
         except BlockchainError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
+        except Exception:
             logger.exception("Erro em ImportWalletView")
             return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -192,19 +190,9 @@ class WalletView(APIView):
             address_str = keys["address"]
             public_key = keys["public_key"]
 
-            if getattr(settings, 'USE_TESTNET', False):
-                rpc_url = settings.TONCENTER_RPC_URL
-            else:
-                rpc_url = settings.TON_NODE_URL
-
-            client = ToncenterClient(
-            base_url=rpc_url,
-            api_key=settings.TONCENTER_API_KEY
-          )
-
-            account = client.raw_get_account_state(Address(address_str))
-            balance = f"{int(account.get('balance', 0)) / 1e9:.9f}"
-
+            # Obtém saldo usando PyTONClient
+            client = PyTONClient()
+            balance = client.get_account_balance(address_str)
 
             tx_qs = Transaction.objects.filter(
                 Q(sender=request.user) | Q(receiver=request.user)
@@ -216,15 +204,15 @@ class WalletView(APIView):
                 "wallets": [
                     {
                         "token_type": "TON",
-                        "balance": balance,
+                        "balance": f"{balance:.9f}",
                         "contract_address": address_str,
                     }
                 ],
                 "transactions": tx_data,
             }
-            return Response(payload, status=200)
+            return Response(payload, status=status.HTTP_200_OK)
 
-        except Exception as e:
+        except Exception:
             logger.exception("Erro ao buscar carteira")
             return Response({"error": "Erro interno ao buscar carteira"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -268,7 +256,7 @@ class SendTransactionView(APIView):
             return Response({"error": "Destinatário não encontrado"}, status=status.HTTP_404_NOT_FOUND)
         except BlockchainError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
+        except Exception:
             logger.exception("Erro ao enviar transação")
             return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -290,7 +278,7 @@ class TonWebhook(APIView):
 
             return Response({"status": "processed"}, status=status.HTTP_200_OK)
 
-        except Exception as e:
+        except Exception:
             logger.exception("Erro ao processar webhook")
             return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

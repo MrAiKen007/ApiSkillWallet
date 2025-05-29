@@ -70,6 +70,30 @@ A **ApiSkillWallet** oferece as seguintes funcionalidades:
 
 ---
 
+## 4. Configuração de URLs do Projeto
+
+No arquivo `urls.py` do projeto principal, inclua as rotas de admin, API e documentação:
+
+```python
+from django.contrib import admin
+from django.urls import path, include
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+
+urlpatterns = [
+    # Admin Django
+    path('admin/', admin.site.urls),
+
+    # API (versionamento)
+    path('api/v1/', include('api.urls')),
+
+    # Esquema OpenAPI
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='schema-swagger-ui'),
+]
+```
+
+---
+
 ## 4. Autenticação
 
 * Endpoints públicos não requerem header de autorização.
@@ -84,7 +108,7 @@ A **ApiSkillWallet** oferece as seguintes funcionalidades:
 
 ## 5. Endpoints e Exemplos
 
-> Base: `http://localhost:8000`
+> Base: `http://localhost:8000/api/v1`
 
 ### 5.1 Raiz da API
 
@@ -92,7 +116,7 @@ A **ApiSkillWallet** oferece as seguintes funcionalidades:
 * Descrição: lista URLs principais.
 
 ```bash
-curl -X GET http://localhost:8000/ \
+curl -X GET http://localhost:8000/api/v1/ \
      -H "Accept: application/json"
 ```
 
@@ -116,7 +140,7 @@ curl -X GET http://localhost:8000/ \
 * `warning`
 
 ```bash
-curl -X POST http://localhost:8000/auth/register/ \
+curl -X POST http://localhost:8000/api/v1/auth/register/ \
      -H "Content-Type: application/json" \
      -d '{"email":"usuario@exemplo.com","password":"SenhaForte!123"}'
 ```
@@ -136,7 +160,7 @@ curl -X POST http://localhost:8000/auth/register/ \
 ```
 
 ```bash
-curl -X POST http://localhost:8000/auth/import/ \
+curl -X POST http://localhost:8000/api/v1/auth/import/ \
      -H "Content-Type: application/json" \
      -d '{"email":"novo@exemplo.com","password":"OutraSenha!456","seed_phrase":"palavra1 palavra2 ... palavra12"}'
 ```
@@ -161,7 +185,7 @@ curl -X POST http://localhost:8000/auth/import/ \
 * `email`
 
 ```bash
-curl -X POST http://localhost:8000/auth/login/ \
+curl -X POST http://localhost:8000/api/v1/auth/login/ \
      -H "Content-Type: application/json" \
      -d '{"email":"usuario@exemplo.com","password":"SenhaForte!123"}'
 ```
@@ -183,7 +207,7 @@ Authorization: Bearer <ACCESS_TOKEN>
 * `transactions`
 
 ```bash
-curl -X GET http://localhost:8000/wallet/ \
+curl -X GET http://localhost:8000/api/v1/wallet/ \
      -H "Authorization: Bearer $TOKEN" \
      -H "Accept: application/json"
 ```
@@ -209,7 +233,7 @@ Authorization: Bearer <ACCESS_TOKEN>
 ```
 
 ```bash
-curl -X POST http://localhost:8000/wallet/send/ \
+curl -X POST http://localhost:8000/api/v1/wallet/send/ \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"receiver":"ed25519:ENDERECO_DESTINO","amount":"1.2345","token":"TON"}'
@@ -234,7 +258,7 @@ curl -X POST http://localhost:8000/wallet/send/ \
 ```
 
 ```bash
-curl -X POST http://localhost:8000/ton/webhook/ \
+curl -X POST http://localhost:8000/api/v1/ton/webhook/ \
      -H "Content-Type: application/json" \
      -d '{"event":{"type":"transaction","data":{"hash":"abcdef123456...","status":"confirmed"}}}'
 ```
@@ -242,6 +266,32 @@ curl -X POST http://localhost:8000/ton/webhook/ \
 ---
 
 ## 6. Script de Automação
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+API="http://localhost:8000/api/v1"
+EMAIL="teste@ex.com"
+PASS="Senha!123"
+
+# 1. Registro
+SEED=$(curl -s -X POST $API/auth/register/ -H "Content-Type: application/json" -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | jq -r '.seed_phrase')
+echo "Seed: $SEED"
+
+# 2. Login
+token=$(curl -s -X POST $API/auth/login/ -H "Content-Type: application/json" -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | jq -r '.token')
+echo "Token: $token"
+
+# 3. Consulta
+curl -s -H "Authorization: Bearer $token" $API/wallet/ | jq
+
+# 4. Enviar 0.1 TON
+address=$(curl -s -H "Authorization: Bearer $token" $API/wallet/ | jq -r '.wallets[0].contract_address')
+curl -s -X POST $API/wallet/send/ -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "{\"receiver\":\"$address\",\"amount\":\"0.1\",\"token\":\"TON\"}" | jq
+```
+
+\--- Script de Automação
 
 ```bash
 #!/usr/bin/env bash

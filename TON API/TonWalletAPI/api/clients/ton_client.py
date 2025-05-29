@@ -2,71 +2,90 @@ import requests
 from pathlib import Path
 from pytonlib import TonlibClient
 import asyncio
+from tonsdk.utils import Address
 from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PyTONClient:
     def __init__(self):
-        # Escolhe config de testnet ou mainnet
-        cfg_url = (
+        self._ensure_testnet_config()
+        self._setup_keystore()
+        
+    def _ensure_testnet_config(self):
+        """Garante o uso da configuração da testnet"""
+        self.ton_config = requests.get(
             'https://ton-blockchain.github.io/testnet-global.config.json'
-            if getattr(settings, 'USE_TESTNET', False)
-            else 'https://ton.org/global.config.json'
-        )
-        self.ton_config = requests.get(cfg_url).json()
+        ).json()
+        logger.debug("Configuração da testnet carregada")
 
-        # Pasta para armazenar chaves temporárias
-        ks = getattr(settings, 'TONLIB_KEYSTORE', '/tmp/ton_keystore')
-        Path(ks).mkdir(parents=True, exist_ok=True)
-        self.keystore = ks
-        # Timeout padrão em ms
+    def _setup_keystore(self):
+        """Configura o armazenamento de chaves"""
+        self.keystore = getattr(settings, 'TONLIB_KEYSTORE', '/tmp/ton_keystore')
+        Path(self.keystore).mkdir(parents=True, exist_ok=True)
         self.tonlib_timeout = getattr(settings, 'TONLIB_TIMEOUT', 30000)
+        logger.debug(f"Keystore configurado em: {self.keystore}")
 
     async def _get_client(self):
+        """Cria e inicializa o cliente Tonlib"""
         client = TonlibClient(
             ls_index=0,
             config=self.ton_config,
             keystore=self.keystore
         )
         await client.init()
+        logger.debug("Cliente Tonlib inicializado")
         return client
 
-    def run_async(self, coro):
-        return asyncio.run(coro)
-
-    def get_masterchain_info(self):
-        async def _():
-            client = await self._get_client()
-            info = await client.get_masterchain_info()
-            await client.close()
-            return info
-        return self.run_async(_())
-
     def get_account_balance(self, address: str) -> float:
-        """Consulta o saldo de `address` via raw_run_method e retorna em TON."""
-        async def _():
-            client = await self._get_client()
-            res = await client.raw_run_method(
-                address,
-                'get_account_state',
-                []
-            )
-            await client.close()
-            # raw_run_method pode retornar JSON-RPC ou runResult direto
-            data = res.get('result', res)
-            # Caso response seja um objeto de estado de conta
-            if isinstance(data, dict) and 'balance' in data and 'coins' in data['balance']:
-                return int(data['balance']['coins']) / 1e9
-            # Caso runResult para contas não inicializadas ou estado
-            if data.get('@type') == 'smc.runResult':
-                stack = data.get('stack', [])
-                # espera [['num', '0x...']]
-                if stack and stack[0][0] == 'num':
-                    coins = int(stack[0][1], 16)
-                    return coins / 1e9
-                # senão não conseguiu extrair
-                raise Exception(f"Não foi possível extrair coins de runResult: {data}")
-            # formato inesperado
-            raise Exception(f"Formato inesperado na resposta: {data}")
-        # Antes: return self.run_async(_())(_())
-        # Correção: apenas executar a coroutine
-        return self.run_async(_())
+        """Obtém o saldo mantendo o formato 0Q... com verificação completa"""
+        async def _wrapper():
+            client = None
+            try:
+                # Validação rigorosa do endereço
+                validated_addr = self._validate_address(address)
+                
+                # Execução da consulta
+                async with self._get_client() as client:
+                    result = await client.raw_run_method(
+                        validated_addr,
+                        'get_wallet_data',
+                        []
+                    )
+                    return self._parse_balance(result)
+                    
+            except Exception as e:
+                logger.error(f"Falha na consulta: {str(e)}")
+                return 0.0
+
+        return asyncio.run(_wrapper())
+
+    def _validate_address(self, address: str) -> str:
+        """Valida e normaliza o endereço no formato 0Q..."""
+        try:
+            addr = Address(address)
+            if not addr.is_userfriendly():
+                raise ValueError("Formato de endereço inválido")
+            return addr.to_string()
+        except Exception as e:
+            logger.error(f"Endereço inválido: {address}")
+            raise
+
+    def _parse_balance(self, response: dict) -> float:
+        """Extrai o saldo da resposta com tratamento de erros"""
+        try:
+            stack = response.get('stack', [])
+            if not stack:
+                logger.debug("Resposta vazia da blockchain")
+                return 0.0
+                
+            balance_entry = stack[0]
+            if balance_entry[0] != 'num':
+                logger.warning(f"Formato inesperado na stack: {balance_entry}")
+                return 0.0
+                
+            return int(balance_entry[1], 16) / 1e9
+        except Exception as e:
+            logger.error(f"Falha ao analisar resposta: {str(e)}")
+            return 0.0

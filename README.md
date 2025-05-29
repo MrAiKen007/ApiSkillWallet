@@ -1,29 +1,29 @@
-# ApiSkillWallet
+# ApiSkillWallet (TonWalletAPI)
 
-Este documento descreve como configurar e testar cada endpoint da API *ApiSkillWallet* (TonWalletAPI) para gerenciamento de carteiras e transações na TON Blockchain.
+Este documento descreve como configurar, executar e testar cada endpoint da API **ApiSkillWallet** — uma API RESTful em **Django** e **Django REST Framework** para gerenciamento de carteiras e transações na blockchain TON.
 
 ---
 
-## 1. Descrição
+## 1. Visão Geral
 
-A *ApiSkillWallet* é uma API RESTful desenvolvida em **Django** e **Django REST Framework** que oferece:
+A **ApiSkillWallet** oferece as seguintes funcionalidades:
 
-- Registro e autenticação de usuários (JWT).
-- Criação e gerenciamento de carteiras TON.
-- Envio e confirmação de transações (Toncoin).
-- Recebimento de webhooks para confirmação de transações.
-- Documentação interativa via Swagger/OpenAPI.
-- Proteção com rate limiting e throttling.
-- Containerização com Docker & Docker Compose.
+* **Registro** de usuário com geração de *seed phrase* e carteira TON.
+* **Importação** de carteira existente via *seed phrase*.
+* **Autenticação** de usuários através de JWT.
+* **Consulta** de saldo e histórico de transações.
+* **Envio** de transações TON.
+* **Recebimento** de webhooks para confirmação de transações.
+* **Documentação** interativa via Swagger/OpenAPI.
 
 ---
 
 ## 2. Pré-requisitos
 
-- Git
-- Docker >= 20.10
-- Docker Compose >= 1.29
-- Python 3.10+ (caso queira executar local sem Docker)
+* Git
+* Docker Engine >= 20.10
+* Docker Compose >= 1.29
+* Python 3.10+ (somente se for executar local sem Docker)
 
 ---
 
@@ -36,7 +36,7 @@ A *ApiSkillWallet* é uma API RESTful desenvolvida em **Django** e **Django REST
    cd ApiSkillWallet/TON\ API/TonWalletAPI
    ```
 
-2. **Crie o arquivo de variáveis de ambiente** `.env` na raiz do projeto:
+2. **Copie o template `.env.sample` para `.env`** e defina as variáveis:
 
    ```ini
    SECRET_KEY=your_django_secret_key
@@ -50,7 +50,7 @@ A *ApiSkillWallet* é uma API RESTful desenvolvida em **Django** e **Django REST
    POSTGRES_PASSWORD=tonpassword
    ```
 
-3. **Inicie os containers Docker**
+3. **Inicie os containers**
 
    ```bash
    docker-compose up -d --build
@@ -65,179 +65,248 @@ A *ApiSkillWallet* é uma API RESTful desenvolvida em **Django** e **Django REST
 
 5. **Verifique**
 
-   - API disponível em: `http://localhost:8000/`
-   - Swagger UI em: `http://localhost:8000/api/docs/`
+   * API disponível em: `http://localhost:8000/`
+   * Swagger UI (OpenAPI) em: `http://localhost:8000/schema-swagger-ui/`
 
 ---
 
 ## 4. Autenticação
 
-Todas as requisições a endpoints protegidos devem incluir o header:
+* Endpoints públicos não requerem header de autorização.
 
-```
-Authorization: Bearer <ACCESS_TOKEN>
-```
+* Para acessar endpoints protegidos, adicione no header:
 
-Os tokens são obtidos via endpoint de login.
+  ```http
+  Authorization: Bearer <ACCESS_TOKEN>
+  ```
+
+* O token *access* é gerado no **login** e dura conforme configuração do `SIMPLE_JWT`.
 
 ---
 
 ## 5. Endpoints e Exemplos de Teste
 
-### 5.1. Autenticação de Usuário
+> **Nota:** todos os exemplos usam `http://localhost:8000` como base.
 
-#### 5.1.1. Registrar Usuário
+### 5.1. Raiz da API
 
-- **Método:** `POST`
-- **URL:** `/api/auth/register/`
-- **Payload (JSON):**
+* **Método:** `GET`
+* **URL:** `/`
+* **Descrição:** retorna as URLs principais.
+
+```bash
+curl -X GET http://localhost:8000/ \
+     -H "Accept: application/json"
+```
+
+### 5.2. Registro de Usuário
+
+* **Método:** `POST`
+
+* **URL:** `/register/`
+
+* **Payload (JSON):**
+
   ```json
   {
-    "username": "usuario1",
-    "password": "Pa$$w0rd123"
-  }
-  ```
-- **Exemplo cURL:**
-  ```bash
-  curl -X POST http://localhost:8000/api/auth/register/ \
-       -H "Content-Type: application/json" \
-       -d '{"username":"usuario1","password":"Pa$$w0rd123"}'
-  ```
-
-#### 5.1.2. Login (Obter Tokens JWT)
-
-- **Método:** `POST`
-- **URL:** `/api/auth/login/`
-- **Payload (JSON):**
-  ```json
-  {
-    "username": "usuario1",
-    "password": "Pa$$w0rd123"
-  }
-  ```
-- **Exemplo cURL:**
-  ```bash
-  curl -X POST http://localhost:8000/api/auth/login/ \
-       -H "Content-Type: application/json" \
-       -d '{"username":"usuario1","password":"Pa$$w0rd123"}'
-  ```
-- **Resposta (JSON):**
-  ```json
-  {
-    "access": "<ACCESS_TOKEN>",
-    "refresh": "<REFRESH_TOKEN>"
+    "email": "usuario@exemplo.com",
+    "password": "SenhaForte!123"
   }
   ```
 
-### 5.2. Endpoints de Carteira
+* **Resposta:**
 
-> **Importante:** todos os exemplos a seguir usam: `-H "Authorization: Bearer <ACCESS_TOKEN>"`
+  * `address`: endereço gerado da carteira TON.
+  * `seed_phrase`: *seed phrase* para backup.
+  * `warning`: lembrete para guardar a frase.
 
-#### 5.2.1. Listar Carteiras
-
-- **Método:** `GET`
-- **URL:** `/api/wallets/`
-- **Parâmetros Opcionais:**
-  - `page`: número da página (padrão: 1)
-  - `page_size`: itens por página (padrão: 10)
-- **Exemplo cURL:**
-  ```bash
-  curl http://localhost:8000/api/wallets/?page=1&page_size=5 \
-       -H "Authorization: Bearer <ACCESS_TOKEN>"
-  ```
-
-#### 5.2.2. Criar Carteira
-
-- **Método:** `POST`
-- **URL:** `/api/wallets/`
-- **Payload:** _não requer JSON_
-- **Exemplo cURL:**
-  ```bash
-  curl -X POST http://localhost:8000/api/wallets/ \
-       -H "Authorization: Bearer <ACCESS_TOKEN>"
-  ```
-
-#### 5.2.3. Detalhar Carteira
-
-- **Método:** `GET`
-- **URL:** `/api/wallets/{id}/`
-- **Exemplo cURL:**
-  ```bash
-  curl http://localhost:8000/api/wallets/13/ \
-       -H "Authorization: Bearer <ACCESS_TOKEN>"
-  ```
-
-### 5.3. Endpoints de Transação
-
-#### 5.3.1. Enviar Toncoin
-
-- **Método:** `POST`
-- **URL:** `/api/transactions/send/`
-- **Payload (JSON):**
-  ```json
-  {
-    "from_wallet": 13,
-    "to_address": "EQBg...",
-    "amount": "0.5",
-    "fee": "0.01"
-  }
-  ```
-- **Exemplo cURL:**
-  ```bash
-  curl -X POST http://localhost:8000/api/transactions/send/ \
-       -H "Authorization: Bearer <ACCESS_TOKEN>" \
-       -H "Content-Type: application/json" \
-       -d '{"from_wallet":13,"to_address":"EQBg...","amount":"0.5","fee":"0.01"}'
-  ```
-
-#### 5.3.2. Listar Transações
-
-- **Método:** `GET`
-- **URL:** `/api/transactions/?wallet={wallet_id}`
-- **Filtros Opcionais:**
-  - `status`: `pending` ou `confirmed`
-  - `date_from`, `date_to`: intervalo `YYYY-MM-DD`
-- **Exemplo cURL:**
-  ```bash
-  curl http://localhost:8000/api/transactions/?wallet=13&status=pending \
-       -H "Authorization: Bearer <ACCESS_TOKEN>"
-  ```
-
-#### 5.3.3. Detalhar Transação
-
-- **Método:** `GET`
-- **URL:** `/api/transactions/{id}/`
-- **Exemplo cURL:**
-  ```bash
-  curl http://localhost:8000/api/transactions/27/ \
-       -H "Authorization: Bearer <ACCESS_TOKEN>"
-  ```
-
-#### 5.3.4. Webhook de Confirmação
-
-- **Método:** `POST`
-- **URL:** `/api/transactions/webhook/`
-- **Payload (TON API Callback):**
-  ```json
-  {
-    "transaction_id": 27,
-    "status": "confirmed",
-    "block_id": "0:abcd1234...",
-    "timestamp": "2025-04-25T12:06:30Z"
-  }
-  ```
-- **Exemplo cURL:**
-  ```bash
-  curl -X POST http://localhost:8000/api/transactions/webhook/ \
-       -H "Content-Type: application/json" \
-       -d '{"transaction_id":27,"status":"confirmed","block_id":"0:abcd1234...","timestamp":"2025-04-25T12:06:30Z"}'
-  ```
+```bash
+curl -X POST http://localhost:8000/register/ \
+     -H "Content-Type: application/json" \
+     -d '{"email":"usuario@exemplo.com","password":"SenhaForte!123"}'
+```
 
 ---
 
-## 6. Testes Automatizados
+### 5.3. Importação de Carteira Existente
 
-- Para executar os testes unitários e de integração:
+* **Método:** `POST`
+
+* **URL:** `/import-wallet/`
+
+* **Payload (JSON):**
+
+  ```json
+  {
+    "email": "novo@exemplo.com",
+    "password": "OutraSenha!456",
+    "seed_phrase": "palavra1 palavra2 ... palavra12"
+  }
+  ```
+
+* **Resposta:** dados da carteira importada.
+
+```bash
+curl -X POST http://localhost:8000/import-wallet/ \
+     -H "Content-Type: application/json" \
+     -d '{"email":"novo@exemplo.com","password":"OutraSenha!456","seed_phrase":"palavra1 palavra2 ... palavra12"}'
+```
+
+---
+
+### 5.4. Login (JWT)
+
+* **Método:** `POST`
+
+* **URL:** `/login/`
+
+* **Payload (JSON):**
+
+  ```json
+  {
+    "email": "usuario@exemplo.com",
+    "password": "SenhaForte!123"
+  }
+  ```
+
+* **Resposta:**
+
+  * `token`: token de acesso JWT.
+  * `public_key`: chave pública do usuário.
+  * `email`: e-mail autenticado.
+
+```bash
+curl -X POST http://localhost:8000/login/ \
+     -H "Content-Type: application/json" \
+     -d '{"email":"usuario@exemplo.com","password":"SenhaForte!123"}'
+```
+
+---
+
+### 5.5. Consulta de Carteira
+
+* **Método:** `GET`
+
+* **URL:** `/wallet/`
+
+* **Headers:**
+
+  ```http
+  Authorization: Bearer <ACCESS_TOKEN>
+  ```
+
+* **Resposta:**
+
+  * `public_key`
+  * `wallets`: lista com saldo e endereço.
+  * `transactions`: últimas 50 transações (sender/receiver).
+
+```bash
+curl -X GET http://localhost:8000/wallet/ \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Accept: application/json"
+```
+
+---
+
+### 5.6. Enviar Transação
+
+* **Método:** `POST`
+
+* **URL:** `/send-transaction/`
+
+* **Headers:**
+
+  ```http
+  Authorization: Bearer <ACCESS_TOKEN>
+  ```
+
+* **Payload (JSON):**
+
+  ```json
+  {
+    "receiver": "ed25519:ENDERECO_DESTINO",
+    "amount": "1.2345",
+    "token": "TON"
+  }
+  ```
+
+* **Resposta:**
+
+  * `tx_hash`: hash da transação enviada.
+
+```bash
+curl -X POST http://localhost:8000/send-transaction/ \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"receiver":"ed25519:ENDERECO_DESTINO","amount":"1.2345","token":"TON"}'
+```
+
+---
+
+### 5.7. Webhook de Transações
+
+* **Método:** `POST`
+
+* **URL:** `/webhook/`
+
+* **Payload (exemplo de callback da TON API):**
+
+  ```json
+  {
+    "event": {
+      "type": "transaction",
+      "data": {
+        "hash": "abcdef123456...",
+        "status": "confirmed"
+      }
+    }
+  }
+  ```
+
+* **Uso:** atualiza o status de `pending` para `confirmed`.
+
+```bash
+curl -X POST http://localhost:8000/webhook/ \
+     -H "Content-Type: application/json" \
+     -d '{"event":{"type":"transaction","data":{"hash":"abcdef123456...","status":"confirmed"}}}'
+```
+
+---
+
+## 6. Automação com Scripts
+
+Você pode criar scripts em Bash ou usar **httpie** para chamadas legíveis. Exemplo de script (*script.sh*):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+API="http://localhost:8000"
+EMAIL="teste@ex.com"
+PASS="Senha!123"
+
+# 1. Registro
+SEED=$(curl -s -X POST $API/register/ -H "Content-Type: application/json" -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | jq -r '.seed_phrase')
+echo "Seed gerada: $SEED"
+
+# 2. Login
+token=$(curl -s -X POST $API/login/ -H "Content-Type: application/json" -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | jq -r '.token')
+echo "Token: $token"
+
+# 3. Consulta
+echo "Carteira:"; curl -s -H "Authorization: Bearer $token" $API/wallet/ | jq
+
+# 4. Enviar 0.1 TON
+address=$(curl -s -H "Authorization: Bearer $token" $API/wallet/ | jq -r '.wallets[0].contract_address')
+curl -s -X POST $API/send-transaction/ -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "{\"receiver\":\"$address\",\"amount\":\"0.1\",\"token\":\"TON\"}" | jq
+```
+
+---
+
+## 7. Testes
+
+* **Unitários & Integração**:
 
   ```bash
   docker-compose exec web python manage.py test
@@ -245,26 +314,16 @@ Os tokens são obtidos via endpoint de login.
 
 ---
 
-## 7. Documentação Interativa
+## 8. Contribution
 
-Acesse o **Swagger UI** para explorar e testar todos os endpoints:
+1. Fork do repositório
+2. Branch: `git checkout -b feature/nova-funcionalidade`
+3. Code e testes
+4. `git push origin feature/nova-funcionalidade`
+5. Abra um Pull Request
 
-```
-http://localhost:8000/api/docs/
-```
-
----
-
-## 8. Contribuição
-
-1. Faça um fork do repositório.
-2. Crie uma branch: `git checkout -b feature/nova-funcionalidade`.
-3. Commit suas alterações: `git commit -m "Adiciona nova funcionalidade"`.
-4. Push para a branch: `git push origin feature/nova-funcionalidade`.
-5. Abra um Pull Request.
-
-> Por favor, siga o padrão de estilo (Black, isort) e garanta que todos os testes passem.
+> Mantenha estilo com **Black** e **isort**. Garanta testes verdes.
 
 ---
 
-**Boa diversão testando a API!**
+**Pronto para iniciar!** Qualquer dúvida, entre em contato.

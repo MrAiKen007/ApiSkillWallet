@@ -5,20 +5,28 @@ import asyncio
 from tonsdk.utils import Address
 from django.conf import settings
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 class PyTONClient:
     def __init__(self):
-        self._ensure_testnet_config()
+        self._ensure_network_config()
         self._setup_keystore()
         
-    def _ensure_testnet_config(self):
-        """Garante o uso da configuração da testnet"""
-        self.ton_config = requests.get(
-            'https://ton-blockchain.github.io/testnet-global.config.json'
-        ).json()
-        logger.debug("Configuração da testnet carregada")
+    def _ensure_network_config(self):
+        """Garante o uso da configuração da rede (testnet ou mainnet)"""
+        network = os.getenv('TON_NETWORK', 'testnet')
+        if network == 'mainnet':
+            self.ton_config = requests.get(
+                'https://ton-blockchain.github.io/global.config.json'
+            ).json()
+            logger.debug("Configuração da mainnet carregada")
+        else:
+            self.ton_config = requests.get(
+                'https://ton-blockchain.github.io/testnet-global.config.json'
+            ).json()
+            logger.debug("Configuração da testnet carregada")
 
     def _setup_keystore(self):
         """Configura o armazenamento de chaves"""

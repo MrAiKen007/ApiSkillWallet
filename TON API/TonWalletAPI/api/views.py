@@ -193,32 +193,34 @@ class WalletView(APIView):
     """
     API para exibir o endereço e saldo da carteira TON do usuário logado.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         user = request.user
         wallet = get_object_or_404(Wallet, user=user)
-        encrypted_seed = user.seed_phrase
-        
-        # Tenta descriptografar com a senha do usuário
-        try:
-            seed_phrase = decrypt_seed(encrypted_seed, user.password)
-        except BlockchainError:
-            # Se falhar, tenta sem senha
-            seed_phrase = decrypt_seed(encrypted_seed)
-            
-        keys = derive_keys_and_address(seed_phrase)
-        address = keys.get('address') if isinstance(keys, dict) else keys[0]
-        
-        client = PyTONClient()
-        balance_raw = client.get_account_balance(address)
-        balance_decimal = Decimal(balance_raw) / Decimal(10**9)
-        balance_str = f"{balance_decimal:.9f}"
+        address = wallet.contract_address  # Endereço salvo no banco
 
-        return Response({
-            'address': address,
-            'balance': balance_str,
-        }, status=status.HTTP_200_OK)
+        # Consulta saldo via API HTTP pública
+        import requests
+        from django.conf import settings
+        url = f"{settings.TON_API_URL}?address={address}"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            if 'result' in data and 'balance' in data['result']:
+                balance = int(data['result']['balance']) / 1e9
+                return Response({
+                    'address': address,
+                    'balance': f"{balance:.9f}",
+                    'token_name': 'Toncoin',
+                    'token_symbol': 'TON'
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': 'Saldo não encontrado ou endereço não ativado.'}, status=404)
+        except Exception as e:
+            import logging
+            logging.exception(f"Erro ao consultar saldo: {e}")
+            return Response({'error': 'Erro ao consultar saldo.'}, status=500)
 
 
 class SendTransactionView(APIView):

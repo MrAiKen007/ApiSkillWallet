@@ -212,3 +212,6 @@ REST_FRAMEWORK = {
     # se você tiver permissão padrão, pode ser:
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
 }
+
+# Configuração da URL da API da TON
+TON_API_URL = os.getenv("TON_API_URL", "https://testnet.toncenter.com/api/v2/getAddressInformation")

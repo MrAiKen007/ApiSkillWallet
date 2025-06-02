@@ -16,6 +16,7 @@ import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from dotenv import load_dotenv
+from datetime import timedelta
 
 load_dotenv()
 
@@ -190,3 +191,23 @@ FERNET_KEY = base64.urlsafe_b64encode(
         iterations=600000
     ).derive(os.getenv('CRYPTO_SECRET').encode())
 )
+
+SIMPLE_JWT = {
+    # (você pode ajustar a validade se quiser)
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    # deixe o algoritmo padrão HS256, a não ser que você saiba que está usando RSA
+    "ALGORITHM": "HS256",
+    # se você não sobrescreveu, o Django vai usar o SECRET_KEY abaixo para assinar
+    # se você usar SIGNING_KEY diferente, confirme que está apontando para a mesma chave
+    # "SIGNING_KEY": "alguma-outra-chave",  
+}
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        # esta é a linha que faz o DRF ler e validar o seu JWT
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    # se você tiver permissão padrão, pode ser:
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+}

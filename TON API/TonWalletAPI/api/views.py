@@ -11,6 +11,15 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.conf import settings
 
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views import View
+from django.shortcuts import get_object_or_404, render, redirect
+
+
+# Importa o cliente TON e utilitários de criptografia (ajuste as importações conforme sua biblioteca)
+from .clients.ton_client import PyTONClient      # Cliente PyTONClient para interação com a TON blockchain
+from .utils import decrypt_seed, derive_keys_and_address  # Funções para descriptografar a seed e derivar chaves/endereço
+
 from .models import User, Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
 from .utils import (
@@ -181,85 +190,88 @@ class LoginView(APIView):
 
 
 class WalletView(APIView):
-    permission_classes = [IsAuthenticated]
+    """
+    API para exibir o endereço e saldo da carteira TON do usuário logado.
+    """
+    permission_classes = [AllowAny]
 
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        wallet = get_object_or_404(Wallet, user=user)
+        encrypted_seed = user.seed_phrase
+        
+        # Tenta descriptografar com a senha do usuário
         try:
-            seed_phrase = decrypt_seed(request.user.seed_phrase)
-            keys = derive_keys_and_address(seed_phrase)
-            address_str = keys["address"]
-            public_key = keys["public_key"]
+            seed_phrase = decrypt_seed(encrypted_seed, user.password)
+        except BlockchainError:
+            # Se falhar, tenta sem senha
+            seed_phrase = decrypt_seed(encrypted_seed)
+            
+        keys = derive_keys_and_address(seed_phrase)
+        address = keys.get('address') if isinstance(keys, dict) else keys[0]
+        
+        client = PyTONClient()
+        balance_raw = client.get_account_balance(address)
+        balance_decimal = Decimal(balance_raw) / Decimal(10**9)
+        balance_str = f"{balance_decimal:.9f}"
 
-            # Obtém saldo usando PyTONClient
-            client = PyTONClient()
-            balance = client.get_account_balance(address_str)
-
-            tx_qs = Transaction.objects.filter(
-                Q(sender=request.user) | Q(receiver=request.user)
-            ).order_by('-timestamp')[:50]
-            tx_data = TransactionSerializer(tx_qs, many=True).data
-
-            payload = {
-                "public_key": public_key,
-                "wallets": [
-                    {
-                        "token_type": "TON",
-                        "balance": f"{balance:.9f}",
-                        "contract_address": address_str,
-                    }
-                ],
-                "transactions": tx_data,
-            }
-            return Response(payload, status=status.HTTP_200_OK)
-
-        except Exception:
-            logger.exception("Erro ao buscar carteira")
-            return Response({"error": "Erro interno ao buscar carteira"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({
+            'address': address,
+            'balance': balance_str,
+        }, status=status.HTTP_200_OK)
 
 
 class SendTransactionView(APIView):
-    permission_classes = [IsAuthenticated]
+    """
+    API para enviar transações na blockchain TON.
+    """
+    permission_classes = [AllowAny]
 
-    def post(self, request):
-        receiver = request.data.get('receiver')
-        amount = Decimal(request.data.get('amount'))
-        token_type = request.data.get('token', 'TON')
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        receiver_address = request.data.get('receiver')
+        amount_str = request.data.get('amount')
+
+        if not receiver_address or not amount_str:
+            return Response({'error': 'Endereço e valor são obrigatórios.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            wallet = request.user.wallets.get(token_type=token_type)
-            if wallet.balance < amount:
-                return Response({"error": "Saldo insuficiente"}, status=status.HTTP_400_BAD_REQUEST)
+            amount_decimal = Decimal(amount_str)
+            amount_nano = int(amount_decimal * Decimal(10**9))
+        except:
+            return Response({'error': 'Valor inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            tx_data = {
-                "from": request.user.public_key,
-                "to": receiver,
-                "amount": str(amount),
-                "timestamp": int(time.time())
-            }
+        receiver_user = get_object_or_404(User, public_key=receiver_address)
+        wallet = get_object_or_404(Wallet, user=user)
+        encrypted_seed = user.seed_phrase
+        
+        # Tenta descriptografar com a senha do usuário
+        try:
+            seed_phrase = decrypt_seed(encrypted_seed, user.password)
+        except BlockchainError:
+            # Se falhar, tenta sem senha
+            seed_phrase = decrypt_seed(encrypted_seed)
+            
+        keys = derive_keys_and_address(seed_phrase)
+        sender_address = keys.get('address') if isinstance(keys, dict) else keys[0]
+        secret_key = keys.get('secret') if isinstance(keys, dict) else keys[1]
 
-            seed_phrase = decrypt_seed(request.user.seed_phrase)
-            signature = sign_transaction(seed_phrase, tx_data)
-            result = broadcast_transaction(tx_data, signature)
+        client = PyTONClient()
+        signed_tx = client.sign_transaction(sender_address, receiver_address, amount_nano, secret_key)
+        broadcast_result = client.broadcast_transaction(signed_tx)
+        tx_hash = broadcast_result if isinstance(broadcast_result, str) else broadcast_result.get('transactionHash')
 
-            Transaction.objects.create(
-                sender=request.user,
-                receiver=User.objects.get(public_key=receiver),
-                amount=amount,
-                token=token_type,
-                tx_hash=result.get('hash'),
-                status='pending'
-            )
+        Transaction.objects.create(
+            sender=user,
+            receiver=receiver_user,
+            amount=amount_decimal,
+            transaction_hash=tx_hash
+        )
 
-            return Response({"tx_hash": result.get('hash')}, status=status.HTTP_200_OK)
-
-        except User.DoesNotExist:
-            return Response({"error": "Destinatário não encontrado"}, status=status.HTTP_404_NOT_FOUND)
-        except BlockchainError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception:
-            logger.exception("Erro ao enviar transação")
-            return Response({"error": "Erro interno"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        return Response({
+            'message': 'Transação enviada com sucesso.',
+            'transaction_hash': tx_hash
+        }, status=status.HTTP_200_OK)
 
 class TonWebhook(APIView):
     authentication_classes = []

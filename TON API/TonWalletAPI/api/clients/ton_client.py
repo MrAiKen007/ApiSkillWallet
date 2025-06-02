@@ -38,27 +38,53 @@ class PyTONClient:
         logger.debug("Cliente Tonlib inicializado")
         return client
 
+    async def get_wallet_type(self, address: str) -> str:
+        """Consulta o tipo de contrato (wallet) do endereço"""
+        async def _wrapper():
+            client = None
+            try:
+                validated_addr = self._validate_address(address)
+                logger.info(f"Consultando tipo de wallet para endereço: {validated_addr}")
+                async with self._get_client() as client:
+                    result = await client.get_account_state(validated_addr)
+                    if result and result.get('code_hash'):
+                        code_hash = result['code_hash']
+                        if code_hash == '207dc560c5956de1a49c3464d8e0d3ebc3a3d026a1d422338dc42d0d6f3c1f0e':
+                            return 'v3R2'
+                        elif code_hash == 'c1a0b7b1b7c1a0b7b1b7c1a0b7b1b7c1a0b7b1b7c1a0b7b1b7c1a0b7b1b7c1a0':
+                            return 'v3R5'
+                        else:
+                            return 'unknown'
+                    return 'empty'
+            except Exception as e:
+                logger.error(f"Falha ao consultar tipo de wallet: {str(e)}")
+                return 'error'
+        return asyncio.run(_wrapper())
+
     def get_account_balance(self, address: str) -> float:
         """Obtém o saldo mantendo o formato 0Q... com verificação completa"""
         async def _wrapper():
             client = None
             try:
-                # Validação rigorosa do endereço
                 validated_addr = self._validate_address(address)
-                
-                # Execução da consulta
+                logger.info(f"Consultando saldo para endereço: {validated_addr}")
+                wallet_type = await self.get_wallet_type(validated_addr)
+                logger.info(f"Tipo de wallet: {wallet_type}")
+                if wallet_type == 'empty':
+                    logger.warning(f"Endereço não ativado: {address}")
+                    return 0.0
                 async with self._get_client() as client:
-                    result = await client.raw_run_method(
-                        validated_addr,
-                        'get_wallet_data',
-                        []
-                    )
-                    return self._parse_balance(result)
-                    
+                    result = await client.get_balance(validated_addr)
+                    logger.info(f"Resultado bruto da consulta: {result}")
+                    if result is None:
+                        logger.warning(f"Saldo não encontrado para o endereço: {address}")
+                        return 0.0
+                    balance = result / 1e9
+                    logger.info(f"Saldo convertido: {balance} TON")
+                    return balance
             except Exception as e:
                 logger.error(f"Falha na consulta: {str(e)}")
                 return 0.0
-
         return asyncio.run(_wrapper())
 
     def _validate_address(self, address: str) -> str:

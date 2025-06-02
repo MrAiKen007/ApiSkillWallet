@@ -134,6 +134,7 @@ class Wallet(models.Model):
         _('endereço do contrato'),
         max_length=256
     )
+    encrypted_seed = models.TextField()
     
     class Meta:
         verbose_name = _('carteira')

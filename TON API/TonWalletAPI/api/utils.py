@@ -64,10 +64,24 @@ def encrypt_seed(seed: str) -> str:
     return cipher.encrypt(seed.encode()).decode()
 
 
-def decrypt_seed(encrypted: str) -> str:
+def decrypt_seed(encrypted: str, password: str = None) -> str:
     """Desencripta a seed armazenada."""
-    cipher = Fernet(derive_crypto_key())
     try:
+        if password:
+            # Se tiver senha, usa ela para derivar a chave
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA512(),
+                length=32,
+                salt=settings.CRYPTO_SALT,
+                iterations=CRYPTO_ITERATIONS,
+                backend=default_backend()
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+            cipher = Fernet(key)
+        else:
+            # Se não tiver senha, usa a chave padrão
+            cipher = Fernet(derive_crypto_key())
+            
         return cipher.decrypt(encrypted.encode()).decode()
     except InvalidToken:
         raise BlockchainError("Token de descriptografia inválido.")

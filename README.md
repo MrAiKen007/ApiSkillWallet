@@ -226,17 +226,17 @@ Authorization: Bearer <ACCESS_TOKEN>
 
 ```json
 {
-  "receiver": "ed25519:ENDERECO_DESTINO",
-  "amount": "1.2345",
+  "receiver": "ENDERECO_TON_DESTINO",
+  "amount": "VALOR_EM_TON",
   "token": "TON"
 }
 ```
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/wallet/send/ \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"receiver":"ed25519:ENDERECO_DESTINO","amount":"1.2345","token":"TON"}'
+  -H "Authorization: Bearer SEU_TOKEN_JWT_AQUI" \
+  -H "Content-Type: application/json" \
+  -d '{"receiver":"ENDERECO_TON_DESTINO","amount":"VALOR_EM_TON","token":"TON"}'
 ```
 
 ### 5.7 Webhook

@@ -3,6 +3,8 @@ from pathlib import Path
 from pytonlib import TonlibClient
 import asyncio
 from tonsdk.utils import Address
+from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+from tonsdk.boc import Cell
 from django.conf import settings
 import logging
 import os
@@ -13,6 +15,7 @@ class PyTONClient:
     def __init__(self):
         self._ensure_network_config()
         self._setup_keystore()
+        self._client = None
         
     def _ensure_network_config(self):
         """Garante o uso da configuração da rede (testnet ou mainnet)"""
@@ -37,14 +40,15 @@ class PyTONClient:
 
     async def _get_client(self):
         """Cria e inicializa o cliente Tonlib"""
-        client = TonlibClient(
-            ls_index=0,
-            config=self.ton_config,
-            keystore=self.keystore
-        )
-        await client.init()
-        logger.debug("Cliente Tonlib inicializado")
-        return client
+        if self._client is None:
+            self._client = TonlibClient(
+                ls_index=0,
+                config=self.ton_config,
+                keystore=self.keystore
+            )
+            await self._client.init()
+            logger.debug("Cliente Tonlib inicializado")
+        return self._client
 
     async def get_wallet_type(self, address: str) -> str:
         """Consulta o tipo de contrato (wallet) do endereço"""
@@ -123,3 +127,97 @@ class PyTONClient:
         except Exception as e:
             logger.error(f"Falha ao analisar resposta: {str(e)}")
             return 0.0
+
+    async def get_seqno(self, address: str) -> int:
+        """Obtém o seqno atual da carteira."""
+        try:
+            client = await self._get_client()
+            result = await client.raw_get_account_state(address)
+            seqno = result.get('account_state', {}).get('wallet', {}).get('seqno', 0)
+            return seqno
+        except Exception as e:
+            logger.exception(f"Erro ao obter seqno: {str(e)}")
+            return 0
+
+    async def _sign_message_async(self, from_address: str, to_address: str, amount: int, private_key: str) -> str:
+        """Versão assíncrona do método sign_message."""
+        try:
+            # Valida endereços
+            from_addr = Address(from_address)
+            to_addr_obj = Address(to_address) # Renomeado para evitar conflito
+
+            # Obtém o seqno atual
+            seqno = await self.get_seqno(from_address)
+            logger.info(f"Seqno atual da carteira: {seqno}")
+
+            # Converte a chave privada de hex para bytes
+            private_key_bytes = bytes.fromhex(private_key)
+
+            # Cria a wallet v3R2
+            from tonsdk.contract.wallet import WalletV3ContractR2
+            from tonsdk.boc import Cell # Manter importação de Cell
+
+            wallet = WalletV3ContractR2(
+                public_key=private_key_bytes,  # A chave pública será derivada da privada
+                private_key=private_key_bytes,
+                workchain=0
+            )
+
+            # Cria a mensagem de transferência usando create_transfer_message
+            # Este método retorna um dicionário, não um objeto com to_boc() diretamente
+            transfer_result_dict = wallet.create_transfer_message(
+                to_addr=to_addr_obj,  # Usando 'to_addr' conforme encontrado
+                amount=amount,
+                seqno=seqno,
+                # Outros argumentos opcionais podem ser adicionados se necessário (payload, send_mode, etc.)
+            )
+
+            # Acessa o objeto Cell da mensagem externa a partir do dicionário retornado
+            signed_message_cell = transfer_result_dict.get("message")
+
+            if not signed_message_cell or not isinstance(signed_message_cell, Cell):
+                 raise ValueError("Não foi possível obter o objeto Cell da mensagem assinada.")
+
+            # Converte o objeto Cell para BOC
+            boc = signed_message_cell.to_boc(False)
+            return boc.hex()
+
+        except Exception as e:
+            logger.exception(f"Erro ao assinar mensagem: {str(e)}")
+            raise
+
+    def sign_message(self, from_address: str, to_address: str, amount: int, private_key: str) -> str:
+        """Assina uma mensagem de transferência TON."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            self._sign_message_async(from_address, to_address, amount, private_key)
+        )
+
+    async def _broadcast_transaction_async(self, signed_boc: str) -> str:
+        """Versão assíncrona do método broadcast_transaction."""
+        try:
+            client = await self._get_client()
+            result = await client.send_boc(signed_boc)
+            if result and 'transaction_id' in result:
+                return result['transaction_id']
+            raise Exception("Resposta inválida do servidor")
+        except Exception as e:
+            logger.exception(f"Erro ao broadcast da transação: {str(e)}")
+            raise
+
+    def broadcast_transaction(self, signed_boc: str) -> str:
+        """Envia o BOC assinado para a rede."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            self._broadcast_transaction_async(signed_boc)
+        )

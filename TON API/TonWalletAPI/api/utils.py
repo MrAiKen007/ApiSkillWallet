@@ -136,19 +136,28 @@ def get_account_balance(address: str) -> float:
 
 def sign_transaction(from_address: str, to_address: str, amount: float, seed_phrase: str) -> str:
     """Assina transação e retorna BOC base64 assinado."""
-    keys = derive_keys_and_address(seed_phrase)
-    client = PyTONClient()
     try:
-        boc = client.sign_message(
-            from_address=from_address,
-            to_address=to_address,
-            amount=amount,
-            private_key=keys['private_key']
-        )
-        return boc
+        logging.info(f"Derivando chaves da seed phrase para endereço {from_address}")
+        keys = derive_keys_and_address(seed_phrase)
+        logging.info("Chaves derivadas com sucesso")
+        
+        client = PyTONClient()
+        logging.info(f"Assinando transação: {from_address} -> {to_address} ({amount} nanoTON)")
+        try:
+            boc = client.sign_message(
+                from_address=from_address,
+                to_address=to_address,
+                amount=amount,
+                private_key=keys['private_key']
+            )
+            logging.info("Transação assinada com sucesso")
+            return boc
+        except Exception as e:
+            logging.exception(f"Erro ao assinar mensagem: {str(e)}")
+            raise BlockchainError(f"Falha ao assinar transação: {str(e)}")
     except Exception as e:
-        logger.exception("Erro ao assinar transação: %s", e)
-        raise BlockchainError("Falha ao assinar transação.")
+        logging.exception(f"Erro ao derivar chaves ou assinar transação: {str(e)}")
+        raise BlockchainError(f"Falha ao assinar transação: {str(e)}")
 
 
 def broadcast_transaction(signed_boc: str) -> str:

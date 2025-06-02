@@ -227,7 +227,7 @@ class SendTransactionView(APIView):
     """
     API para enviar transações na blockchain TON.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         user = request.user
@@ -235,37 +235,62 @@ class SendTransactionView(APIView):
         amount_str = request.data.get('amount')
 
         if not receiver_address or not amount_str:
-            return Response({'error': 'Endereço e valor são obrigatórios.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Endereço e valor são obrigatórios.'}, status=400)
 
         try:
             amount_decimal = Decimal(amount_str)
             amount_nano = int(amount_decimal * Decimal(10**9))
-        except:
-            return Response({'error': 'Valor inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logging.exception("Erro ao converter valor da transação.")
+            return Response({'error': 'Valor inválido.'}, status=400)
 
-        receiver_user = get_object_or_404(User, public_key=receiver_address)
         wallet = get_object_or_404(Wallet, user=user)
-        encrypted_seed = user.seed_phrase
-        
-        # Tenta descriptografar com a senha do usuário
+        sender_address = wallet.contract_address # Endereço do remetente
+
+        # --- Início da lógica para obter a seed phrase e assinar ---        
+        seed_phrase = None
         try:
-            seed_phrase = decrypt_seed(encrypted_seed, user.password)
-        except BlockchainError:
-            # Se falhar, tenta sem senha
-            seed_phrase = decrypt_seed(encrypted_seed)
+            # 1. Tenta descriptografar a seed phrase salva
+            encrypted_seed = user.seed_phrase
             
-        keys = derive_keys_and_address(seed_phrase)
-        sender_address = keys.get('address') if isinstance(keys, dict) else keys[0]
-        secret_key = keys.get('secret') if isinstance(keys, dict) else keys[1]
+            # Tenta primeiro com a senha do usuário, se disponível
+            try:
+                seed_phrase = decrypt_seed(encrypted_seed, user.password) 
+                logging.info("Seed phrase descriptografada com senha.")
+            except BlockchainError:
+                # Se falhar, tenta descriptografar apenas com a chave Fernet padrão
+                seed_phrase = decrypt_seed(encrypted_seed)
+                logging.info("Seed phrase descriptografada com chave padrão.")
 
-        client = PyTONClient()
-        signed_tx = client.sign_transaction(sender_address, receiver_address, amount_nano, secret_key)
-        broadcast_result = client.broadcast_transaction(signed_tx)
-        tx_hash = broadcast_result if isinstance(broadcast_result, str) else broadcast_result.get('transactionHash')
+            if not seed_phrase:
+                raise BlockchainError("Falha na descriptografia da seed phrase.")
 
+        except BlockchainError as e:
+            logging.exception(f"Erro ao obter ou descriptografar seed phrase: {e}")
+            return Response({'error': 'Erro de segurança ao acessar a carteira.'}, status=500)
+        except Exception as e:
+            logging.exception(f"Erro inesperado ao obter seed phrase: {e}")
+            return Response({'error': 'Erro interno ao acessar a carteira.'}, status=500)
+            
+        # 2. Assina e transmite a transação usando a seed phrase
+        try:
+            client = PyTONClient()
+            # O método sign_transaction em api/utils.py espera a seed phrase
+            signed_tx = sign_transaction(sender_address, receiver_address, amount_nano, seed_phrase) 
+            broadcast_result = broadcast_transaction(signed_tx)
+            tx_hash = broadcast_result if isinstance(broadcast_result, str) else broadcast_result.get('transactionHash')
+
+        except BlockchainError as e:
+            logging.exception(f"Erro da blockchain ao enviar transação: {e}")
+            return Response({'error': f'Erro da blockchain: {str(e)}'}, status=500)
+        except Exception as e:
+            logging.exception(f"Erro inesperado ao enviar transação: {e}")
+            return Response({'error': 'Erro interno ao enviar transação.'}, status=500)
+
+        # Salva a transação
         Transaction.objects.create(
             sender=user,
-            receiver=receiver_user,
+            receiver_address=receiver_address,
             amount=amount_decimal,
             transaction_hash=tx_hash
         )
@@ -273,7 +298,7 @@ class SendTransactionView(APIView):
         return Response({
             'message': 'Transação enviada com sucesso.',
             'transaction_hash': tx_hash
-        }, status=status.HTTP_200_OK)
+        }, status=200)
 
 class TonWebhook(APIView):
     authentication_classes = []
